@@ -23,17 +23,33 @@ class MessageInfo {
   }
 }
 
-/// A full message: its paragraphs of text.
+/// One line of the heading at the top of a message.
+class HeadingLine {
+  final bool isTitle; // title = bold; otherwise date / code / place
+  final String text;
+  const HeadingLine(this.isTitle, this.text);
+}
+
+/// A full message: its heading lines and its paragraphs of text.
 class Message {
   final String code;
   final String title;
+  final List<HeadingLine> heading;
   final List<String> paragraphs;
 
-  const Message({required this.code, required this.title, required this.paragraphs});
+  const Message({
+    required this.code,
+    required this.title,
+    required this.paragraphs,
+    this.heading = const [],
+  });
 
   factory Message.fromJson(Map<String, dynamic> j) => Message(
         code: j['code'] as String,
         title: j['title'] as String,
+        heading: ((j['heading'] as List?) ?? const [])
+            .map((h) => HeadingLine((h as Map)['k'] == 'title', h['t'] as String))
+            .toList(),
         paragraphs: (j['paragraphs'] as List).cast<String>(),
       );
 }

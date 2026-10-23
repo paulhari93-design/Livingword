@@ -13,17 +13,16 @@ if errorlevel 1 (
 
 echo.
 echo [1/4] Creating the Android project files...
-call flutter create --platforms android --org com.livingword --project-name livingword .
-if exist test\widget_test.dart del test\widget_test.dart
+if exist android\app (
+  echo Already set up - skipping.
+) else (
+  call flutter create --platforms android --org com.livingword --project-name livingword .
+  if exist test\widget_test.dart del test\widget_test.dart
+)
 
 echo.
-echo Converting Word files in the my_messages folder...
-if exist "my_messages\*.docx" (
-  python -m pip install -q python-docx
-  for %%f in ("my_messages\*.docx") do python tools\docx_to_json.py "%%f"
-) else (
-  echo No Word files found in my_messages - showing the sample only.
-)
+echo Preparing Firebase settings...
+python tools\make_firebase_options.py "%USERPROFILE%\Documents\livingword_keys\google-services.json"
 echo.
 echo [2/4] Downloading packages...
 call flutter pub get

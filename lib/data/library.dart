@@ -1,8 +1,7 @@
 import 'dart:convert';
 
-import 'package:flutter/services.dart';
-
 import '../models/message.dart';
+import 'local_files.dart';
 
 /// One place where a search word was found.
 class SearchHit {
@@ -29,10 +28,17 @@ class Library {
   List<MessageInfo>? _catalog;
   final Map<String, Message> _messages = {};
 
+  /// Forget cached data (after a download/sync) so the next read uses the new files.
+  void reload() {
+    _catalog = null;
+    _messages.clear();
+  }
+
+  /// Messages downloaded to this phone.
   Future<List<MessageInfo>> catalog() async {
     if (_catalog != null) return _catalog!;
-    final raw = await rootBundle.loadString('assets/messages/index.json');
-    _catalog = (jsonDecode(raw) as List)
+    final list = (await LocalFiles.instance.readJson('messages/index.json')) as List?;
+    _catalog = (list ?? const [])
         .map((e) => MessageInfo.fromJson(e as Map<String, dynamic>))
         .toList();
     return _catalog!;
@@ -41,8 +47,8 @@ class Library {
   Future<Message> message(MessageInfo info) async {
     final cached = _messages[info.code];
     if (cached != null) return cached;
-    final raw = await rootBundle.loadString('assets/messages/${info.file}');
-    final m = Message.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    final raw = await LocalFiles.instance.readString('messages/${info.file}');
+    final m = Message.fromJson(jsonDecode(raw!) as Map<String, dynamic>);
     _messages[info.code] = m;
     return m;
   }

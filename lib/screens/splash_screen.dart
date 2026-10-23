@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../data/local_files.dart';
+import 'download_screen.dart';
 import 'main_menu_screen.dart';
 
 /// Shown for 2 seconds when the app opens, then goes to the main menu.
@@ -21,11 +23,13 @@ class _SplashScreenState extends State<SplashScreen> {
     _timer = Timer(const Duration(seconds: 2), _goNext);
   }
 
-  void _goNext() {
+  Future<void> _goNext() async {
+    final setupDone = await LocalFiles.instance.setupDone;
     if (!mounted) return;
     Navigator.of(context).pushReplacement(PageRouteBuilder(
       transitionDuration: const Duration(milliseconds: 500),
-      pageBuilder: (_, __, ___) => const MainMenuScreen(),
+      pageBuilder: (_, __, ___) =>
+          setupDone ? const MainMenuScreen() : const DownloadScreen(firstRun: true),
       transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
     ));
   }

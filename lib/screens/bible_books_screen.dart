@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/bible.dart';
 import '../theme/reading_theme.dart';
+import 'bible_mode_switch.dart';
 import 'bible_reader_screen.dart';
 
 /// Tamil Bible: Old / New Testament book lists, with a book-name filter.
@@ -45,10 +46,11 @@ class _BibleBooksScreenState extends State<BibleBooksScreen> {
     }
   }
 
-  Widget _list(bool oldTestament) {
+  Widget _list(bool oldTestament, BibleMode mode) {
+    final english = mode == BibleMode.english;
     final items = _books.where((b) => b.isOldTestament == oldTestament && b.matches(_query)).toList();
     if (_books.isEmpty) return const Center(child: CircularProgressIndicator());
-    if (items.isEmpty) return const Center(child: Text('புத்தகம் கிடைக்கவில்லை'));
+    if (items.isEmpty) return Center(child: Text(english ? 'No book found' : 'புத்தகம் கிடைக்கவில்லை'));
     final theme = Theme.of(context);
     return ListView.separated(
       itemCount: items.length,
@@ -60,8 +62,12 @@ class _BibleBooksScreenState extends State<BibleBooksScreen> {
             backgroundColor: theme.colorScheme.primaryContainer,
             child: Text('${b.number}', style: TextStyle(color: theme.colorScheme.onPrimaryContainer)),
           ),
-          title: Text(b.tamil, style: const TextStyle(fontSize: 18)),
-          subtitle: Text('${b.english} · ${b.chapterCount} அதிகாரங்கள்'),
+          title: Text(english ? b.english : b.tamil, style: const TextStyle(fontSize: 18)),
+          subtitle: Text(switch (mode) {
+            BibleMode.tamil => '${b.chapterCount} அதிகாரங்கள்',
+            BibleMode.english => '${b.chapterCount} chapters',
+            BibleMode.both => '${b.english} · ${b.chapterCount} அதிகாரங்கள் / chapters',
+          }),
           onTap: () => _openBook(b),
         );
       },
@@ -70,39 +76,53 @@ class _BibleBooksScreenState extends State<BibleBooksScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('தமிழ் வேதாகமம்'),
-          actions: const [ThemeButton()],
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'பழைய ஏற்பாடு'),
-              Tab(text: 'புதிய ஏற்பாடு'),
-            ],
-          ),
-        ),
-        body: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-              child: TextField(
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  hintText: 'புத்தகத்தின் பெயர் / Book name',
-                  border: OutlineInputBorder(),
-                  isDense: true,
+    return ValueListenableBuilder<BibleMode>(
+      valueListenable: bibleMode,
+      builder: (context, mode, _) {
+        final english = mode == BibleMode.english;
+        return DefaultTabController(
+          length: 2,
+          child: Scaffold(
+            appBar: AppBar(
+              title: Text(english ? 'Holy Bible' : 'பரிசுத்த வேதாகமம்'),
+              actions: const [ThemeButton()],
+              bottom: PreferredSize(
+                preferredSize: const Size.fromHeight(104),
+                child: Column(
+                  children: [
+                    const BibleModeSwitch(),
+                    TabBar(
+                      tabs: [
+                        Tab(text: english ? 'Old Testament' : 'பழைய ஏற்பாடு'),
+                        Tab(text: english ? 'New Testament' : 'புதிய ஏற்பாடு'),
+                      ],
+                    ),
+                  ],
                 ),
-                onChanged: (v) => setState(() => _query = v),
               ),
             ),
-            Expanded(
-              child: TabBarView(children: [_list(true), _list(false)]),
+            body: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                  child: TextField(
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search),
+                      hintText: 'புத்தகத்தின் பெயர் / Book name',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    onChanged: (v) => setState(() => _query = v),
+                  ),
+                ),
+                Expanded(
+                  child: TabBarView(children: [_list(true, mode), _list(false, mode)]),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }

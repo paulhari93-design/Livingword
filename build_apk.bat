@@ -2,12 +2,8 @@
 title LivingWord - build APK
 cd /d "%~dp0"
 
-echo Converting Word files in the my_messages folder...
-if exist "my_messages\*.docx" (
-  python -m pip install -q python-docx
-  for %%f in ("my_messages\*.docx") do python tools\docx_to_json.py "%%f"
-)
-
+echo Preparing Firebase settings...
+python tools\make_firebase_options.py "%USERPROFILE%\Documents\livingword_keys\google-services.json"
 echo.
 echo Building the APK (takes a few minutes)...
 call flutter pub get

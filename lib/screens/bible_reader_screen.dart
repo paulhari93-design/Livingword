@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import '../data/bible.dart';
 import '../data/reader_store.dart';
 import '../theme/reading_theme.dart';
+import 'bible_mode_switch.dart';
 
-/// Reads one book of the Bible. Swipe left/right (or use the arrows) to change chapter.
+/// Reads one book of the Bible in Tamil, English (KJV), or both.
+/// Swipe left/right (or use the arrows) to change chapter.
 class BibleReaderScreen extends StatefulWidget {
   final BibleBookInfo book;
   final int initialChapter; // 1-based
@@ -22,8 +24,15 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
   final _store = ReaderStore();
   late final PageController _pages = PageController(initialPage: widget.initialChapter - 1);
   late int _chapter = widget.initialChapter;
-  List<List<String>>? _chapters;
   double _fontSize = 20;
+
+  BibleMode get _mode => bibleMode.value;
+  List<List<String>>? _tamil;
+  List<List<String>>? _english;
+
+  bool get _needTamil => _mode != BibleMode.english;
+  bool get _needEnglish => _mode != BibleMode.tamil;
+  bool get _ready => (!_needTamil || _tamil != null) && (!_needEnglish || _english != null);
 
   @override
   void initState() {
@@ -31,13 +40,30 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
     _store.loadFontSize().then((s) {
       if (mounted) setState(() => _fontSize = s);
     });
-    Bible.instance.chapters(widget.book).then((c) {
-      if (mounted) setState(() => _chapters = c);
-    });
+    bibleMode.addListener(_onModeChanged);
+    _loadTexts();
+  }
+
+  void _onModeChanged() {
+    if (!mounted) return;
+    setState(() {});
+    _loadTexts();
+  }
+
+  Future<void> _loadTexts() async {
+    if (_needTamil && _tamil == null) {
+      final t = await Bible.instance.chapters(widget.book, BibleLang.tamil);
+      if (mounted) setState(() => _tamil = t);
+    }
+    if (_needEnglish && _english == null) {
+      final e = await Bible.instance.chapters(widget.book, BibleLang.english);
+      if (mounted) setState(() => _english = e);
+    }
   }
 
   @override
   void dispose() {
+    bibleMode.removeListener(_onModeChanged);
     _pages.dispose();
     super.dispose();
   }
@@ -51,6 +77,12 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
     if (chapter < 1 || chapter > widget.book.chapterCount) return;
     _pages.animateToPage(chapter - 1, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
   }
+
+  String get _bookName => switch (_mode) {
+        BibleMode.tamil => widget.book.tamil,
+        BibleMode.english => widget.book.english,
+        BibleMode.both => '${widget.book.tamil} · ${widget.book.english}',
+      };
 
   Future<void> _pickChapter() async {
     final picked = await showModalBottomSheet<int>(
@@ -85,7 +117,7 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Flexible(child: Text('${widget.book.tamil} $_chapter', overflow: TextOverflow.ellipsis)),
+              Flexible(child: Text('$_bookName $_chapter', overflow: TextOverflow.ellipsis)),
               if (total > 1) const Icon(Icons.arrow_drop_down),
             ],
           ),
@@ -103,16 +135,21 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
           ),
           const ThemeButton(),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(52),
+          child: const BibleModeSwitch(),
+        ),
       ),
-      body: _chapters == null
+      body: !_ready
           ? const Center(child: CircularProgressIndicator())
           : PageView.builder(
               controller: _pages,
               itemCount: total,
               onPageChanged: (i) => setState(() => _chapter = i + 1),
               itemBuilder: (_, i) => _ChapterPage(
-                title: '${widget.book.tamil} ${i + 1}',
-                verses: _chapters![i],
+                title: '$_bookName ${i + 1}',
+                tamil: _needTamil ? _tamil![i] : null,
+                english: _needEnglish ? _english![i] : null,
                 fontSize: _fontSize,
                 textColor: textColor,
                 numberColor: numberColor,
@@ -128,16 +165,19 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
                     TextButton.icon(
                       onPressed: _chapter > 1 ? () => _goTo(_chapter - 1) : null,
                       icon: const Icon(Icons.chevron_left),
-                      label: const Text('முந்தைய'),
+                      label: Text(_mode == BibleMode.english ? 'Previous' : 'முந்தைய'),
                     ),
                     const Spacer(),
                     Text('$_chapter / $total', style: theme.textTheme.bodyMedium),
                     const Spacer(),
                     TextButton(
                       onPressed: _chapter < total ? () => _goTo(_chapter + 1) : null,
-                      child: const Row(
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
-                        children: [Text('அடுத்து'), Icon(Icons.chevron_right)],
+                        children: [
+                          Text(_mode == BibleMode.english ? 'Next' : 'அடுத்து'),
+                          const Icon(Icons.chevron_right),
+                        ],
                       ),
                     ),
                   ],
@@ -148,18 +188,20 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
   }
 }
 
-/// One chapter: title + numbered verses, with its own scroll bar.
+/// One chapter: title + numbered verses (Tamil, English, or both), with its own scroll bar.
 class _ChapterPage extends StatefulWidget {
   const _ChapterPage({
     required this.title,
-    required this.verses,
+    required this.tamil,
+    required this.english,
     required this.fontSize,
     required this.textColor,
     required this.numberColor,
   });
 
   final String title;
-  final List<String> verses;
+  final List<String>? tamil;
+  final List<String>? english;
   final double fontSize;
   final Color textColor;
   final Color numberColor;
@@ -179,7 +221,12 @@ class _ChapterPageState extends State<_ChapterPage> {
 
   @override
   Widget build(BuildContext context) {
-    final verses = widget.verses;
+    final ta = widget.tamil;
+    final en = widget.english;
+    final both = ta != null && en != null;
+    final count = (ta ?? en)!.length;
+    final englishColor = both ? widget.textColor.withValues(alpha: 0.75) : widget.textColor;
+
     return RawScrollbar(
       controller: _scroll,
       thumbVisibility: true,
@@ -192,7 +239,7 @@ class _ChapterPageState extends State<_ChapterPage> {
       child: ListView.builder(
         controller: _scroll,
         padding: const EdgeInsets.fromLTRB(20, 12, 24, 48),
-        itemCount: verses.length + 1,
+        itemCount: count + 1,
         itemBuilder: (_, i) {
           if (i == 0) {
             return Padding(
@@ -203,19 +250,30 @@ class _ChapterPageState extends State<_ChapterPage> {
                       fontSize: widget.fontSize + 4, fontWeight: FontWeight.w700, color: widget.textColor)),
             );
           }
+          final number = TextSpan(
+            text: '$i  ',
+            style: TextStyle(
+                fontSize: widget.fontSize * 0.75, fontWeight: FontWeight.bold, color: widget.numberColor),
+          );
+          final children = <InlineSpan>[number];
+          if (ta != null) children.add(TextSpan(text: ta[i - 1]));
+          if (both) children.add(const TextSpan(text: '\n'));
+          if (en != null && i - 1 < en.length) {
+            children.add(TextSpan(
+              text: en[i - 1],
+              style: both
+                  ? TextStyle(fontSize: widget.fontSize * 0.9, fontStyle: FontStyle.italic, color: englishColor)
+                  : null,
+            ));
+          }
           return Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: SelectableText.rich(TextSpan(
-              style: TextStyle(fontSize: widget.fontSize, height: 1.6, color: widget.textColor),
-              children: [
-                TextSpan(
-                  text: '$i  ',
-                  style: TextStyle(
-                      fontSize: widget.fontSize * 0.75, fontWeight: FontWeight.bold, color: widget.numberColor),
-                ),
-                TextSpan(text: verses[i - 1]),
-              ],
-            )),
+            padding: EdgeInsets.only(bottom: both ? 18 : 12),
+            child: SelectableText.rich(
+              TextSpan(
+                style: TextStyle(fontSize: widget.fontSize, height: 1.6, color: widget.textColor),
+                children: children,
+              ),
+            ),
           );
         },
       ),

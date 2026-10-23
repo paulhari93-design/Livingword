@@ -63,7 +63,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _load() async {
     final size = await _store.loadFontSize();
-    final hls = await _store.loadHighlights(widget.message.code);
+    var hls = await _store.loadHighlights(widget.message.code);
+    // If the message was corrected since the highlights were made, put them back on their words.
+    final fixed = Highlight.reanchor(hls, widget.message.paragraphs);
+    if (fixed != null) {
+      hls = fixed;
+      await _store.saveHighlights(widget.message.code, hls);
+    }
     if (!mounted) return;
     setState(() {
       _fontSize = size;
@@ -139,7 +145,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final e = math.max(sel.start, sel.end);
     setState(() {
       _highlights.removeWhere((h) => h.overlaps(paragraph, s, e));
-      _highlights.add(Highlight(paragraph: paragraph, start: s, end: e, color: color));
+      _highlights.add(Highlight(
+        paragraph: paragraph,
+        start: s,
+        end: e,
+        color: color,
+        text: widget.message.paragraphs[paragraph].substring(s, e),
+      ));
     });
     _store.saveHighlights(widget.message.code, _highlights);
   }
@@ -180,6 +192,63 @@ class _ReaderScreenState extends State<ReaderScreen> {
       }
     }
     return spans;
+  }
+
+  /// Title (bold) and date / code / place, all centred, above the message text.
+  /// The title shrinks if needed so that no word is ever split across two lines.
+  Widget _heading(Message m, Color textColor) {
+    return LayoutBuilder(builder: (context, box) {
+      final titleSize = _titleFontSize(
+        m.heading.where((h) => h.isTitle).map((h) => _spaced(h.text)),
+        box.maxWidth,
+      );
+      return Padding(
+        padding: const EdgeInsets.only(top: 8, bottom: 24),
+        child: Column(
+          children: [
+            for (final h in m.heading)
+              Padding(
+                padding: EdgeInsets.only(bottom: h.isTitle ? 6 : 2),
+                child: SelectableText(
+                  h.isTitle ? _spaced(h.text) : h.text,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: h.isTitle ? titleSize : _fontSize - 2,
+                    fontWeight: h.isTitle ? FontWeight.w700 : FontWeight.normal,
+                    height: 1.5,
+                    color: h.isTitle ? textColor : textColor.withValues(alpha: 0.8),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 12),
+            Divider(color: textColor.withValues(alpha: 0.2), indent: 40, endIndent: 40),
+          ],
+        ),
+      );
+    });
+  }
+
+  /// "word1,word2" -> "word1, word2" so a title can break after a comma.
+  static String _spaced(String t) => t.replaceAllMapped(RegExp(r',(?=\S)'), (_) => ', ');
+
+  /// Largest bold font size (up to text size + 6) at which the longest word of
+  /// the title still fits on one line.
+  double _titleFontSize(Iterable<String> lines, double maxWidth) {
+    final words = lines.expand((l) => l.split(RegExp(r'\s+'))).where((w) => w.isNotEmpty);
+    var size = _fontSize + 6;
+    while (size > 12) {
+      final fits = words.every((w) {
+        final tp = TextPainter(
+          text: TextSpan(text: w, style: TextStyle(fontSize: size, fontWeight: FontWeight.w700)),
+          textDirection: TextDirection.ltr,
+          maxLines: 1,
+        )..layout();
+        return tp.width <= maxWidth - 4;
+      });
+      if (fits) break;
+      size -= 1;
+    }
+    return size;
   }
 
   Widget _paragraph(int index, String text, Color textColor) {
@@ -342,6 +411,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (m.heading.isNotEmpty) _heading(m, textColor),
                 for (var i = 0; i < m.paragraphs.length; i++)
                   _paragraph(i, m.paragraphs[i], textColor),
               ],

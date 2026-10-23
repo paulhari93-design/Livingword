@@ -59,3 +59,6 @@ LivingWord.apk
 # Temporary update files
 _update*
 LivingWord-old-phones.apk
+
+# Google Play upload files
+*.aab
