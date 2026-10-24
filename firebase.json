@@ -1,0 +1,8 @@
+{
+  "hosting": {
+    "site": "livingword-tamil",
+    "public": "docs",
+    "cleanUrls": true,
+    "ignore": ["firebase.json", "**/.*"]
+  }
+}
