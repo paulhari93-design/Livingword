@@ -68,6 +68,27 @@ class BibleModeController extends ValueNotifier<BibleMode> {
 
 final bibleMode = BibleModeController();
 
+/// In "Both": true = split view (Tamil above, English below, each scrolling),
+/// false = normal view (each Tamil verse with its English under it). Remembered.
+class BibleSplitController extends ValueNotifier<bool> {
+  BibleSplitController() : super(true) {
+    _load();
+  }
+  static const _key = 'bible_split';
+
+  Future<void> _load() async {
+    final saved = await Prefs.instance.getBool(_key);
+    if (saved != null) value = saved;
+  }
+
+  Future<void> set(bool split) async {
+    value = split;
+    await Prefs.instance.set(_key, split);
+  }
+}
+
+final bibleSplit = BibleSplitController();
+
 /// Loads the downloaded Tamil Bible and English KJV from the phone (cached after first load).
 /// Sources: github.com/aruljohn/Bible-tamil and github.com/aruljohn/Bible-kjv (MIT licence).
 class Bible {

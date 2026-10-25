@@ -18,7 +18,7 @@ class MessageLangController extends ValueNotifier<String> {
 
   Future<void> _load() async {
     final saved = await Prefs.instance.getString(_key);
-    if (saved == 'ta' || saved == 'en') value = saved!;
+    if (saved == 'ta' || saved == 'en' || saved == 'both') value = saved!;
   }
 
   Future<void> set(String lang) async {
@@ -28,6 +28,27 @@ class MessageLangController extends ValueNotifier<String> {
 }
 
 final messageLang = MessageLangController();
+
+/// In "Both": true = split view (Tamil above, English below, each scrolling),
+/// false = normal view (each Tamil paragraph with its English under it). Remembered.
+class MessageSplitController extends ValueNotifier<bool> {
+  MessageSplitController() : super(true) {
+    _load();
+  }
+  static const _key = 'message_split';
+
+  Future<void> _load() async {
+    final saved = await Prefs.instance.getBool(_key);
+    if (saved != null) value = saved;
+  }
+
+  Future<void> set(bool split) async {
+    value = split;
+    await Prefs.instance.set(_key, split);
+  }
+}
+
+final messageSplit = MessageSplitController();
 
 /// One place where a search word was found.
 class SearchHit {
@@ -62,7 +83,7 @@ class Library {
 
   /// Messages downloaded to this phone, in [lang] (default: the chosen language).
   Future<List<MessageInfo>> catalog({String? lang}) async {
-    final l = lang ?? messageLang.value;
+    final l = (lang ?? messageLang.value) == 'en' ? 'en' : 'ta'; // 'both' lists the Tamil titles
     final cached = _catalogs[l];
     if (cached != null) return cached;
     List? list;

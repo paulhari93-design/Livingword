@@ -148,3 +148,8 @@ class _ThemeSwatch extends StatelessWidget {
     );
   }
 }
+
+/// Opens the theme picker (from the ⋮ menu).
+void showThemePicker(BuildContext context) {
+  showModalBottomSheet(context: context, builder: (_) => const _ThemePicker());
+}

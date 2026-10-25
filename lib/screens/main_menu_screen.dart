@@ -9,6 +9,7 @@ import 'bible_books_screen.dart';
 import 'download_screen.dart';
 import 'home_screen.dart';
 import 'reader_screen.dart';
+import '../widgets/more_menu.dart';
 
 /// The two main choices: the Bible and the Messages.
 /// Also checks for new / corrected messages each time the app opens.
@@ -123,7 +124,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
             const Text('LivingWord'),
           ],
         ),
-        actions: const [ThemeButton()],
+        actions: const [MoreMenu()],
       ),
       body: SafeArea(
         child: ListView(

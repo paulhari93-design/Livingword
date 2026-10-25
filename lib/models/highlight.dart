@@ -10,20 +10,25 @@ enum HighlightColor {
   final Color color;
 }
 
+/// What a mark does: colour the background, make the text bold, or underline it.
+enum MarkStyle { color, bold, underline }
+
 /// A highlight is saved as: paragraph number + character range + colour,
 /// plus the highlighted words themselves so it can be found again after a correction.
 class Highlight {
   final int paragraph;
   final int start;
   final int end;
-  final HighlightColor color;
+  final HighlightColor color; // used when style == MarkStyle.color
+  final MarkStyle style;
   final String? text; // the highlighted words (null for highlights saved by older versions)
 
   const Highlight({
     required this.paragraph,
     required this.start,
     required this.end,
-    required this.color,
+    this.color = HighlightColor.yellow,
+    this.style = MarkStyle.color,
     this.text,
   });
 
@@ -34,6 +39,7 @@ class Highlight {
         start: newStart,
         end: newStart + (end - start),
         color: color,
+        style: style,
         text: text,
       );
 
@@ -42,6 +48,7 @@ class Highlight {
         's': start,
         'e': end,
         'c': color.name,
+        if (style != MarkStyle.color) 'k': style.name,
         if (text != null) 't': text,
       };
 
@@ -52,6 +59,10 @@ class Highlight {
         color: HighlightColor.values.firstWhere(
           (c) => c.name == j['c'],
           orElse: () => HighlightColor.yellow,
+        ),
+        style: MarkStyle.values.firstWhere(
+          (k) => k.name == j['k'],
+          orElse: () => MarkStyle.color,
         ),
         text: j['t'] as String?,
       );
@@ -74,6 +85,7 @@ class Highlight {
             start: h.start,
             end: h.end,
             color: h.color,
+            style: h.style,
             text: paragraphs[h.paragraph].substring(h.start, h.end),
           ));
         }

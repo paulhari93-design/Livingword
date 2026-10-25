@@ -7,6 +7,8 @@ import '../theme/reading_theme.dart';
 import 'message_lang_switch.dart';
 import 'reader_screen.dart';
 import 'search_screen.dart';
+import 'section_switch.dart';
+import '../widgets/more_menu.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -34,7 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadCatalog() async {
-    final lang = messageLang.value;
+    final lang = messageLang.value == 'en' ? 'en' : 'ta'; // 'both' lists the Tamil titles
     var list = await Library.instance.catalog(lang: lang);
     if (!mounted) return;
     setState(() {
@@ -48,7 +50,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (_) {}
     Library.instance.reload();
     list = await Library.instance.catalog(lang: lang);
-    if (!mounted || messageLang.value != lang) return;
+    if (!mounted || (messageLang.value == 'en' ? 'en' : 'ta') != lang) return;
     setState(() {
       _all = list;
       _loading = false;
@@ -95,7 +97,8 @@ class _HomeScreenState extends State<HomeScreen> {
               MaterialPageRoute(builder: (_) => const SearchScreen()),
             ),
           ),
-          const ThemeButton(),
+          const GoToBibleButton(),
+          const MoreMenu(),
         ],
       ),
       body: Column(
@@ -103,15 +106,20 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 8),
           ValueListenableBuilder<String>(
             valueListenable: messageLang,
-            builder: (_, lang, __) => MessageLangSwitch(value: lang, onChanged: messageLang.set),
+            // "Both" is offered only inside a message.
+            builder: (_, lang, __) =>
+                MessageLangSwitch(value: lang == 'en' ? 'en' : 'ta', onChanged: messageLang.set),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
             child: TextField(
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search),
-                hintText: 'Search by name or code (e.g. 47-0508)',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search),
+                hintText: messageLang.value == 'en'
+                    ? 'Search by name or code (e.g. 47-0508)'
+                    : 'தலைப்பு அல்லது வருடக்குறியீடு தேடல் (47-0508)',
+                hintMaxLines: 2,
+                border: const OutlineInputBorder(),
               ),
               onChanged: (v) => setState(() => _query = v),
             ),
@@ -123,7 +131,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     ? Center(
                         child: Text(_query.isEmpty && messageLang.value == 'en'
                             ? 'English messages are not available yet.\nCheck your internet connection and try again.'
-                            : 'No messages found',
+                            : messageLang.value == 'en'
+                                ? 'No messages found'
+                                : 'செய்திகள் எதுவும் கிடைக்கவில்லை',
                             textAlign: TextAlign.center),
                       )
                     : RefreshIndicator(

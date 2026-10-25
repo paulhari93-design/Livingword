@@ -4,6 +4,8 @@ import '../data/bible.dart';
 import '../theme/reading_theme.dart';
 import 'bible_mode_switch.dart';
 import 'bible_reader_screen.dart';
+import 'section_switch.dart';
+import '../widgets/more_menu.dart';
 
 /// Tamil Bible: Old / New Testament book lists, with a book-name filter.
 class BibleBooksScreen extends StatefulWidget {
@@ -85,7 +87,7 @@ class _BibleBooksScreenState extends State<BibleBooksScreen> {
           child: Scaffold(
             appBar: AppBar(
               title: Text(english ? 'Holy Bible' : 'பரிசுத்த வேதாகமம்'),
-              actions: const [ThemeButton()],
+              actions: const [GoToMessagesButton(), MoreMenu()],
               bottom: PreferredSize(
                 preferredSize: const Size.fromHeight(104),
                 child: Column(

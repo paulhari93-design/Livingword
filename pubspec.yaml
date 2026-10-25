@@ -1,7 +1,7 @@
 name: livingword
 description: Tamil e-reader for translated messages.
 publish_to: 'none'
-version: 1.0.2+3
+version: 1.0.3+4
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -14,6 +14,9 @@ dependencies:
   cloud_firestore: any
   firebase_messaging: any
   path_provider: any
+  # Save as PDF (with highlights): pdf builds the file, flutter_file_dialog saves it.
+  pdf: any
+  flutter_file_dialog: any
 
 dev_dependencies:
   flutter_test:
