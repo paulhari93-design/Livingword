@@ -25,6 +25,9 @@ class SearchScreen extends StatefulWidget {
 }
 
 class _SearchScreenState extends State<SearchScreen> {
+  /// Searching English messages? (the open message's language, else the chosen tab)
+  bool get _english => (widget.current?.lang ?? messageLang.value) == 'en';
+
   final _controller = TextEditingController();
   late bool _onlyCurrent = widget.current != null;
   List<SearchHit> _hits = [];
@@ -57,6 +60,7 @@ class _SearchScreenState extends State<SearchScreen> {
     final hits = await Library.instance.search(
       q,
       only: _onlyCurrent ? widget.current : null,
+      lang: widget.current?.lang,
     );
     if (!mounted || q != _controller.text) return;
     setState(() {
@@ -115,7 +119,7 @@ class _SearchScreenState extends State<SearchScreen> {
     final messageCount = _hits.map((h) => h.info.code).toSet().length;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('தேடல் / Search')),
+      appBar: AppBar(title: Text(_english ? 'Search' : 'தேடல் / Search')),
       body: Column(
         children: [
           Padding(
@@ -128,7 +132,7 @@ class _SearchScreenState extends State<SearchScreen> {
               onSubmitted: (_) => _run(),
               decoration: InputDecoration(
                 prefixIcon: const Icon(Icons.search),
-                hintText: 'தமிழ் சொல் அல்லது வாக்கியம்',
+                hintText: _english ? 'English word or sentence' : 'தமிழ் சொல் அல்லது வாக்கியம்',
                 border: const OutlineInputBorder(),
                 suffixIcon: IconButton(
                   icon: const Icon(Icons.clear),

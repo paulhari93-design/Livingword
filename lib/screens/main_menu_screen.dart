@@ -66,8 +66,10 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
           onPressed: () async {
             messenger.hideCurrentMaterialBanner();
             if (r.newCodes.length == 1) {
-              final infos = await Library.instance.catalog();
-              final info = infos.where((m) => m.code == r.newCodes.first).firstOrNull;
+              final code = r.newCodes.first;
+              final info = await Library.instance.find(code, messageLang.value) ??
+                  await Library.instance.find(code, 'ta') ??
+                  await Library.instance.find(code, 'en');
               if (info == null || !mounted) return;
               final message = await Library.instance.message(info);
               if (!mounted) return;
@@ -129,8 +131,8 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
           children: [
             _MenuCard(
               leading: const Icon(Icons.menu_book_rounded, size: 48, color: Colors.white),
-              title: 'தமிழ்/English பரிசுத்த வேதாகமம்',
-              subtitle: 'Tamil / English (KJV) Holy Bible',
+              title: 'பரிசுத்த வேதாகமம்',
+              subtitle: 'THE HOLY BIBLE (KJV)',
               color: const Color(0xFF8D5524),
               onTap: _openBible,
             ),

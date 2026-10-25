@@ -3,13 +3,15 @@ class MessageInfo {
   final String code; // e.g. 47-0508 = year 47, month 05, day 08
   final String title;
   final String file;
+  final String lang; // 'ta' = Tamil, 'en' = English
 
-  const MessageInfo({required this.code, required this.title, required this.file});
+  const MessageInfo({required this.code, required this.title, required this.file, this.lang = 'ta'});
 
-  factory MessageInfo.fromJson(Map<String, dynamic> j) => MessageInfo(
+  factory MessageInfo.fromJson(Map<String, dynamic> j, {String lang = 'ta'}) => MessageInfo(
         code: j['code'] as String,
         title: j['title'] as String,
         file: j['file'] as String,
+        lang: lang,
       );
 
   /// Matches "47-0508", "470508", "47 05 08", part of a code, or part of the title.
@@ -36,15 +38,25 @@ class Message {
   final String title;
   final List<HeadingLine> heading;
   final List<String> paragraphs;
+  final String lang; // 'ta' = Tamil, 'en' = English
+  /// Tamil only: for each Tamil paragraph, the matching English paragraph index.
+  final List<int>? align;
 
   const Message({
     required this.code,
     required this.title,
     required this.paragraphs,
     this.heading = const [],
+    this.lang = 'ta',
+    this.align,
   });
 
-  factory Message.fromJson(Map<String, dynamic> j) => Message(
+  /// Key for saving highlights (Tamil keeps the old key so existing highlights stay).
+  String get storageId => lang == 'en' ? 'en_$code' : code;
+
+  factory Message.fromJson(Map<String, dynamic> j, {String lang = 'ta'}) => Message(
+        lang: lang,
+        align: (j['align'] as List?)?.map((e) => (e as num).toInt()).toList(),
         code: j['code'] as String,
         title: j['title'] as String,
         heading: ((j['heading'] as List?) ?? const [])

@@ -8,18 +8,21 @@ import '../data/reader_store.dart';
 import '../models/highlight.dart';
 import '../models/message.dart';
 import '../theme/reading_theme.dart';
+import 'message_lang_switch.dart';
 import 'search_screen.dart';
 
 class ReaderScreen extends StatefulWidget {
   final Message message;
   final int? initialParagraph; // jump here when opened from search
   final String? searchQuery; // mark these words when opened from search
+  final bool flashParagraph; // briefly mark initialParagraph (after a language switch)
 
   const ReaderScreen({
     super.key,
     required this.message,
     this.initialParagraph,
     this.searchQuery,
+    this.flashParagraph = false,
   });
 
   @override
@@ -38,6 +41,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   double _fontSize = 20;
   List<Highlight> _highlights = [];
+  MessageInfo? _other; // the same message in the other language, if on the phone
+  int? _flash; // paragraph briefly marked after switching language
 
   // Search-in-reader state
   String _query = ''; // normalized
@@ -63,23 +68,32 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _load() async {
     final size = await _store.loadFontSize();
-    var hls = await _store.loadHighlights(widget.message.code);
+    var hls = await _store.loadHighlights(widget.message.storageId);
     // If the message was corrected since the highlights were made, put them back on their words.
     final fixed = Highlight.reanchor(hls, widget.message.paragraphs);
     if (fixed != null) {
       hls = fixed;
-      await _store.saveHighlights(widget.message.code, hls);
+      await _store.saveHighlights(widget.message.storageId, hls);
     }
+    final other = await Library.instance
+        .find(widget.message.code, widget.message.lang == 'en' ? 'ta' : 'en');
     if (!mounted) return;
     setState(() {
       _fontSize = size;
       _highlights = hls;
+      _other = other;
     });
     final q = widget.searchQuery;
     if (q != null && q.trim().isNotEmpty) {
       _applySearch(q, jumpTo: widget.initialParagraph);
     } else if (widget.initialParagraph != null) {
       _jumpToParagraph(widget.initialParagraph!);
+      if (widget.flashParagraph) {
+        setState(() => _flash = widget.initialParagraph);
+        Future.delayed(const Duration(milliseconds: 1800), () {
+          if (mounted) setState(() => _flash = null);
+        });
+      }
     }
   }
 
@@ -124,8 +138,69 @@ class _ReaderScreenState extends State<ReaderScreen> {
     });
   }
 
+  /// The paragraph at the top of the screen right now.
+  int _currentParagraph() {
+    final viewport = _scroll.position.context.storageContext.findRenderObject();
+    if (viewport is! RenderBox) return 0;
+    final top = viewport.localToGlobal(Offset.zero).dy + 8;
+    for (var i = 0; i < _keys.length; i++) {
+      final box = _keys[i].currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.attached) continue;
+      final bottom = box.localToGlobal(Offset(0, box.size.height)).dy;
+      if (bottom > top) return i;
+    }
+    return 0;
+  }
+
+  /// Opens the same message in the other language, at the matching paragraph.
+  Future<void> _switchLanguage() async {
+    final other = _other;
+    if (other == null) return;
+    final message = await Library.instance.message(other);
+    final here = _scroll.hasClients && _scroll.offset > 20 ? _currentParagraph() : null;
+    int? target;
+    if (here != null) {
+      if (widget.message.lang == 'ta') {
+        // Tamil -> English: the Tamil message knows its English paragraph.
+        final a = widget.message.align;
+        if (a != null && here < a.length) target = a[here];
+      } else {
+        // English -> Tamil: the first Tamil paragraph matched to this (or a later) English one.
+        final a = message.align;
+        if (a != null) {
+          for (var i = 0; i < a.length; i++) {
+            if (a[i] >= here) {
+              target = i;
+              break;
+            }
+          }
+          target ??= a.length - 1;
+        }
+      }
+      // No match list (e.g. not published yet): use the same position in the message.
+      target ??= (here * message.paragraphs.length / widget.message.paragraphs.length).floor();
+      target = target.clamp(0, message.paragraphs.length - 1).toInt();
+    }
+    await messageLang.set(other.lang);
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(PageRouteBuilder(
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (_, __, ___) => ReaderScreen(
+        message: message,
+        initialParagraph: target,
+        flashParagraph: target != null,
+      ),
+      transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
+    ));
+  }
+
   Future<void> _openSearch() async {
-    final info = MessageInfo(code: widget.message.code, title: widget.message.title, file: '${widget.message.code}.json');
+    final info = MessageInfo(
+      code: widget.message.code,
+      title: widget.message.title,
+      file: '${widget.message.code}.json',
+      lang: widget.message.lang,
+    );
     final result = await Navigator.of(context).push<JumpTo>(
       MaterialPageRoute(builder: (_) => SearchScreen(current: info)),
     );
@@ -153,7 +228,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         text: widget.message.paragraphs[paragraph].substring(s, e),
       ));
     });
-    _store.saveHighlights(widget.message.code, _highlights);
+    _store.saveHighlights(widget.message.storageId, _highlights);
   }
 
   void _removeHighlight(int paragraph, TextSelection sel) {
@@ -161,7 +236,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final s = math.min(sel.start, sel.end);
     final e = sel.isCollapsed ? s + 1 : math.max(sel.start, sel.end);
     setState(() => _highlights.removeWhere((h) => h.overlaps(paragraph, s, e)));
-    _store.saveHighlights(widget.message.code, _highlights);
+    _store.saveHighlights(widget.message.storageId, _highlights);
   }
 
   /// Splits a paragraph into runs: user highlights, search matches, plain text.
@@ -252,9 +327,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Widget _paragraph(int index, String text, Color textColor) {
-    return Padding(
+    return AnimatedContainer(
       key: _keys[index],
-      padding: const EdgeInsets.only(bottom: 16),
+      duration: const Duration(milliseconds: 400),
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: _flash == index ? const Color(0x4087CEEB) : Colors.transparent,
+        borderRadius: BorderRadius.circular(6),
+      ),
       child: SelectableText.rich(
         TextSpan(
           style: TextStyle(fontSize: _fontSize, height: 1.6, color: textColor),
@@ -376,6 +456,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
           ),
           const ThemeButton(),
         ],
+        bottom: _other == null
+            ? null
+            : PreferredSize(
+                preferredSize: const Size.fromHeight(52),
+                child: MessageLangSwitch(
+                  value: m.lang,
+                  onChanged: (_) => _switchLanguage(),
+                ),
+              ),
       ),
       bottomNavigationBar: _query.isEmpty ? null : _searchBar(theme),
       body: Listener(

@@ -52,74 +52,99 @@ class Cloud {
 
   bool _syncing = false;
 
-  /// Downloads new messages and silently replaces corrected ones.
+  /// Downloads new messages (Tamil and English) and silently replaces corrected ones.
   /// [onProgress] gets (done, total) while downloading.
-  Future<SyncResult> syncMessages({void Function(int done, int total)? onProgress}) async {
-    if (_syncing) return const SyncResult();
+  Future<SyncResult>? _running;
+
+  Future<SyncResult> syncMessages({void Function(int done, int total)? onProgress}) {
+    // If a check is already running, wait for that one instead of starting another.
+    return _running ??= _syncAll(onProgress: onProgress).whenComplete(() => _running = null);
+  }
+
+  Future<SyncResult> _syncAll({void Function(int done, int total)? onProgress}) async {
     _syncing = true;
     try {
       await _ready();
-      final files = LocalFiles.instance;
-      final catalogDoc = await _get('catalog/messages');
-      final items = ((catalogDoc.data()?['items'] as List?) ?? const [])
-          .cast<Map<String, dynamic>>();
-
-      final localList = ((await files.readJson('messages/index.json')) as List?)
-              ?.cast<Map<String, dynamic>>() ??
-          <Map<String, dynamic>>[];
-      final local = {for (final e in localList) e['code'] as String: e};
-      final firstDownload = local.isEmpty;
-
-      final toFetch = items.where((it) {
-        final mine = local[it['code']];
-        return mine == null || mine['version'] != it['version'];
-      }).toList();
-
-      final newTitles = <String>[];
-      final newCodes = <String>[];
-      var corrected = 0;
-      var done = 0;
-      onProgress?.call(0, toFetch.length);
-
-      for (final it in toFetch) {
-        final code = it['code'] as String;
-        final doc = await _get('messages/$code');
-        final json = doc.data()?['json'] as String?;
-        if (json == null) continue;
-        await files.writeString('messages/$code.json', json);
-        final isNew = !local.containsKey(code);
-        local[code] = {
-          'code': code,
-          'title': it['title'],
-          'file': '$code.json',
-          'version': it['version'],
-        };
-        if (isNew && !firstDownload) {
-          newTitles.add(it['title'] as String);
-          newCodes.add(code);
-        } else if (!isNew) {
-          corrected++;
-        }
-        done++;
-        onProgress?.call(done, toFetch.length);
-      }
-
-      // Remove messages that were taken off the cloud.
-      final cloudCodes = items.map((e) => e['code']).toSet();
-      for (final code in local.keys.toList()) {
-        if (!cloudCodes.contains(code)) {
-          local.remove(code);
-          await files.delete('messages/$code.json');
-        }
-      }
-
-      final index = local.values.toList()
-        ..sort((a, b) => (a['code'] as String).compareTo(b['code'] as String));
-      await files.writeJson('messages/index.json', index);
-      return SyncResult(newTitles: newTitles, newCodes: newCodes, corrected: corrected);
+      // Tamil first (it must succeed); English is optional (may not be uploaded yet).
+      final ta = await _syncLang('ta', onProgress: onProgress);
+      var en = const SyncResult();
+      try {
+        en = await _syncLang('en', onProgress: onProgress);
+      } catch (_) {}
+      return SyncResult(
+        newTitles: [...ta.newTitles, ...en.newTitles],
+        newCodes: [...ta.newCodes, ...en.newCodes],
+        corrected: ta.corrected + en.corrected,
+      );
     } finally {
       _syncing = false;
     }
+  }
+
+  /// Firestore: catalog/messages + messages/<code> (Tamil),
+  ///            catalog/messages_en + messages_en/<code> (English).
+  Future<SyncResult> _syncLang(String lang, {void Function(int done, int total)? onProgress}) async {
+    final files = LocalFiles.instance;
+    final folder = lang == 'en' ? 'messages_en' : 'messages';
+    final catalogDoc = await _get(lang == 'en' ? 'catalog/messages_en' : 'catalog/messages');
+    final items = ((catalogDoc.data()?['items'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>();
+
+    final localList = ((await files.readJson('$folder/index.json')) as List?)
+            ?.cast<Map<String, dynamic>>() ??
+        <Map<String, dynamic>>[];
+    final local = {for (final e in localList) e['code'] as String: e};
+    final firstDownload = local.isEmpty;
+
+    final toFetch = items.where((it) {
+      final mine = local[it['code']];
+      return mine == null || mine['version'] != it['version'];
+    }).toList();
+
+    final newTitles = <String>[];
+    final newCodes = <String>[];
+    var corrected = 0;
+    var done = 0;
+    onProgress?.call(0, toFetch.length);
+
+    for (final it in toFetch) {
+      final code = it['code'] as String;
+      final doc = await _get('$folder/$code');
+      final json = doc.data()?['json'] as String?;
+      if (json == null) continue;
+      await files.writeString('$folder/$code.json', json);
+      final isNew = !local.containsKey(code);
+      local[code] = {
+        'code': code,
+        'title': it['title'],
+        'file': '$code.json',
+        'version': it['version'],
+      };
+      if (isNew && !firstDownload) {
+        newTitles.add(it['title'] as String);
+        newCodes.add(code);
+      } else if (!isNew) {
+        corrected++;
+      }
+      done++;
+      onProgress?.call(done, toFetch.length);
+    }
+
+    // Remove messages that were taken off the cloud.
+    final cloudCodes = items.map((e) => e['code']).toSet();
+    for (final code in local.keys.toList()) {
+      if (!cloudCodes.contains(code)) {
+        local.remove(code);
+        await files.delete('$folder/$code.json');
+      }
+    }
+
+    final index = local.values.toList()
+      ..sort((a, b) => (a['code'] as String).compareTo(b['code'] as String));
+    if (index.isNotEmpty || localList.isNotEmpty) {
+      await files.writeJson('$folder/index.json', index);
+    }
+    return SyncResult(newTitles: newTitles, newCodes: newCodes, corrected: corrected);
   }
 
   // ---------------- Bible ----------------

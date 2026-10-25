@@ -1,7 +1,33 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../models/message.dart';
 import 'local_files.dart';
+import 'prefs.dart';
+
+/// Folder on the phone for each language: Tamil in messages/, English in messages_en/.
+String messageFolder(String lang) => lang == 'en' ? 'messages_en' : 'messages';
+
+/// The chosen message language ('ta' or 'en'), shared by the list and the reader, and remembered.
+class MessageLangController extends ValueNotifier<String> {
+  MessageLangController() : super('ta') {
+    _load();
+  }
+  static const _key = 'message_lang';
+
+  Future<void> _load() async {
+    final saved = await Prefs.instance.getString(_key);
+    if (saved == 'ta' || saved == 'en') value = saved!;
+  }
+
+  Future<void> set(String lang) async {
+    value = lang;
+    await Prefs.instance.set(_key, lang);
+  }
+}
+
+final messageLang = MessageLangController();
 
 /// One place where a search word was found.
 class SearchHit {
@@ -25,39 +51,55 @@ class Library {
   Library._();
   static final Library instance = Library._();
 
-  List<MessageInfo>? _catalog;
-  final Map<String, Message> _messages = {};
+  final Map<String, List<MessageInfo>> _catalogs = {}; // lang -> list
+  final Map<String, Message> _messages = {}; // 'lang/code' -> message
 
   /// Forget cached data (after a download/sync) so the next read uses the new files.
   void reload() {
-    _catalog = null;
+    _catalogs.clear();
     _messages.clear();
   }
 
-  /// Messages downloaded to this phone.
-  Future<List<MessageInfo>> catalog() async {
-    if (_catalog != null) return _catalog!;
-    final list = (await LocalFiles.instance.readJson('messages/index.json')) as List?;
-    _catalog = (list ?? const [])
-        .map((e) => MessageInfo.fromJson(e as Map<String, dynamic>))
+  /// Messages downloaded to this phone, in [lang] (default: the chosen language).
+  Future<List<MessageInfo>> catalog({String? lang}) async {
+    final l = lang ?? messageLang.value;
+    final cached = _catalogs[l];
+    if (cached != null) return cached;
+    List? list;
+    try {
+      list = (await LocalFiles.instance.readJson('${messageFolder(l)}/index.json')) as List?;
+    } catch (_) {}
+    final result = (list ?? const [])
+        .map((e) => MessageInfo.fromJson(e as Map<String, dynamic>, lang: l))
         .toList();
-    return _catalog!;
+    _catalogs[l] = result;
+    return result;
+  }
+
+  /// The same message in another language, if it is on the phone.
+  Future<MessageInfo?> find(String code, String lang) async {
+    final list = await catalog(lang: lang);
+    for (final m in list) {
+      if (m.code.toUpperCase() == code.toUpperCase()) return m;
+    }
+    return null;
   }
 
   Future<Message> message(MessageInfo info) async {
-    final cached = _messages[info.code];
+    final key = '${info.lang}/${info.code}';
+    final cached = _messages[key];
     if (cached != null) return cached;
-    final raw = await LocalFiles.instance.readString('messages/${info.file}');
-    final m = Message.fromJson(jsonDecode(raw!) as Map<String, dynamic>);
-    _messages[info.code] = m;
+    final raw = await LocalFiles.instance.readString('${messageFolder(info.lang)}/${info.file}');
+    final m = Message.fromJson(jsonDecode(raw!) as Map<String, dynamic>, lang: info.lang);
+    _messages[key] = m;
     return m;
   }
 
   /// Finds every paragraph containing [query] (Tamil or English).
-  Future<List<SearchHit>> search(String query, {MessageInfo? only}) async {
+  Future<List<SearchHit>> search(String query, {MessageInfo? only, String? lang}) async {
     final q = normalizeQuery(query);
     if (q.isEmpty) return [];
-    final infos = only != null ? [only] : await catalog();
+    final infos = only != null ? [only] : await catalog(lang: lang);
     final hits = <SearchHit>[];
     for (final info in infos) {
       final m = await message(info);
