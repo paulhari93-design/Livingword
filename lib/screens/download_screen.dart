@@ -44,8 +44,11 @@ class _DownloadScreenState extends State<DownloadScreen> {
         await Cloud.instance.syncMessages(
           onProgress: (d, t) => setState(() => _progress = t == 0 ? null : d / t),
         );
-        await LocalFiles.instance.setMessagesDownloaded(true);
         Library.instance.reload();
+        if (!await LocalFiles.instance.hasMessageFiles) {
+          throw StateError('No messages were received');
+        }
+        await LocalFiles.instance.setMessagesDownloaded(true);
       }
       if (_bible) {
         setState(() {
@@ -55,6 +58,9 @@ class _DownloadScreenState extends State<DownloadScreen> {
         await Cloud.instance.downloadBible(
           onProgress: (d, t) => setState(() => _progress = d / t),
         );
+        if (!await LocalFiles.instance.hasBibleFiles) {
+          throw StateError('The Bible was not received');
+        }
       }
       await LocalFiles.instance.markSetupDone();
       if (!mounted) return;
@@ -63,7 +69,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
       setState(() {
         _busy = false;
         _error = 'பதிவிறக்கம் தோல்வி. இணைய இணைப்பைச் சரிபார்த்து மீண்டும் முயலவும்.\n'
-            'Download failed. Check your internet connection and try again.';
+            'Download failed. Check your internet connection and try again.\n($e)';
       });
     }
   }

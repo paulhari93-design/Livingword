@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 
+import '../firebase_options.dart';
 import 'local_files.dart';
 
 /// Result of checking the cloud for messages.
@@ -30,6 +31,18 @@ class Cloud {
 
   bool get available => Firebase.apps.isNotEmpty;
 
+  /// Makes sure Firebase is connected (it may not have finished when the app opened).
+  Future<void> _ready() async {
+    if (Firebase.apps.isNotEmpty) return;
+    final options = firebaseOptions;
+    if (options != null) {
+      try {
+        await Firebase.initializeApp(options: options).timeout(const Duration(seconds: 20));
+      } catch (_) {}
+    }
+    if (Firebase.apps.isEmpty) throw StateError('Could not connect to the server');
+  }
+
   FirebaseFirestore get _db => FirebaseFirestore.instance;
 
   Future<DocumentSnapshot<Map<String, dynamic>>> _get(String path) =>
@@ -42,9 +55,10 @@ class Cloud {
   /// Downloads new messages and silently replaces corrected ones.
   /// [onProgress] gets (done, total) while downloading.
   Future<SyncResult> syncMessages({void Function(int done, int total)? onProgress}) async {
-    if (!available || _syncing) return const SyncResult();
+    if (_syncing) return const SyncResult();
     _syncing = true;
     try {
+      await _ready();
       final files = LocalFiles.instance;
       final catalogDoc = await _get('catalog/messages');
       final items = ((catalogDoc.data()?['items'] as List?) ?? const [])
@@ -112,7 +126,7 @@ class Cloud {
 
   /// Downloads the Tamil Bible and the English KJV (66 + 66 books).
   Future<void> downloadBible({void Function(int done, int total)? onProgress}) async {
-    if (!available) throw StateError('No connection to the server');
+    await _ready();
     final files = LocalFiles.instance;
     final meta = await _get('catalog/bible');
     final booksJson = meta.data()?['books'] as String?;

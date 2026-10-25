@@ -1,7 +1,7 @@
 name: livingword
 description: Tamil e-reader for translated messages.
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -9,7 +9,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  shared_preferences: ^2.3.0
   # Firebase: download messages/Bible and receive notifications ('any' = newest that fits).
   firebase_core: any
   cloud_firestore: any

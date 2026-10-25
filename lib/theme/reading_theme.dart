@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import '../data/prefs.dart';
 
 /// The reading themes users can pick from.
 enum ReadingTheme {
@@ -40,8 +40,7 @@ class ThemeController extends ValueNotifier<ReadingTheme> {
   static const _key = 'reading_theme';
 
   Future<void> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final name = prefs.getString(_key);
+    final name = await Prefs.instance.getString(_key);
     value = ReadingTheme.values.firstWhere(
       (t) => t.name == name,
       orElse: () => ReadingTheme.light,
@@ -50,8 +49,7 @@ class ThemeController extends ValueNotifier<ReadingTheme> {
 
   Future<void> set(ReadingTheme theme) async {
     value = theme;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key, theme.name);
+    await Prefs.instance.set(_key, theme.name);
   }
 }
 

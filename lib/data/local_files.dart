@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'prefs.dart';
 
 /// Files saved in the app's private folder on the phone (not visible to other apps).
 ///
@@ -67,28 +67,38 @@ class LocalFiles {
   static const _messagesOnKey = 'messages_downloaded';
   static const _bibleOnKey = 'bible_downloaded';
 
-  Future<bool> _flag(String key) async {
+  Future<bool> _flag(String key) async => (await Prefs.instance.getBool(key)) ?? false;
+
+  Future<void> _setFlag(String key, bool value) => Prefs.instance.set(key, value);
+
+  /// True when at least one message is saved on the phone.
+  Future<bool> get hasMessageFiles async {
     try {
-      final p = await SharedPreferences.getInstance();
-      return p.getBool(key) ?? false;
+      final list = await readJson('messages/index.json');
+      return list is List && list.isNotEmpty;
     } catch (_) {
       return false;
     }
   }
 
-  Future<void> _setFlag(String key, bool value) async {
+  /// True when the Bible is saved on the phone.
+  Future<bool> get hasBibleFiles async {
     try {
-      final p = await SharedPreferences.getInstance();
-      await p.setBool(key, value);
-    } catch (_) {}
+      final books = await readJson('bible/books.json');
+      return books is List && books.isNotEmpty && await exists('bible/ta/01.json');
+    } catch (_) {
+      return false;
+    }
   }
 
-  Future<bool> get setupDone => _flag(_setupDoneKey);
+  Future<bool> get setupDone async =>
+      await _flag(_setupDoneKey) || await hasMessageFiles || await hasBibleFiles;
   Future<void> markSetupDone() => _setFlag(_setupDoneKey, true);
 
-  Future<bool> get messagesDownloaded => _flag(_messagesOnKey);
+  /// Decided by the files themselves, so it can never get out of step.
+  Future<bool> get messagesDownloaded => hasMessageFiles;
   Future<void> setMessagesDownloaded(bool v) => _setFlag(_messagesOnKey, v);
 
-  Future<bool> get bibleDownloaded => _flag(_bibleOnKey);
+  Future<bool> get bibleDownloaded => hasBibleFiles;
   Future<void> setBibleDownloaded(bool v) => _setFlag(_bibleOnKey, v);
 }

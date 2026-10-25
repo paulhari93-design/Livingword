@@ -1,9 +1,9 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'local_files.dart';
+import 'prefs.dart';
 
 /// One book of the Bible, as listed in bible/books.json.
 class BibleBookInfo {
@@ -53,8 +53,7 @@ class BibleModeController extends ValueNotifier<BibleMode> {
 
   Future<void> _load() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final saved = prefs.getString(_key);
+      final saved = await Prefs.instance.getString(_key);
       value = BibleMode.values.firstWhere((m) => m.name == saved, orElse: () => BibleMode.tamil);
     } catch (_) {}
   }
@@ -62,8 +61,7 @@ class BibleModeController extends ValueNotifier<BibleMode> {
   Future<void> set(BibleMode mode) async {
     value = mode;
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_key, mode.name);
+      await Prefs.instance.set(_key, mode.name);
     } catch (_) {}
   }
 }
