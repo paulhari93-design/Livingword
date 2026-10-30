@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../data/prefs.dart';
+import '../data/profile.dart';
 
 /// The reading themes users can pick from.
 enum ReadingTheme {
@@ -36,8 +37,14 @@ enum ReadingTheme {
 
 /// Holds the current theme for the whole app and remembers it.
 class ThemeController extends ValueNotifier<ReadingTheme> {
-  ThemeController() : super(ReadingTheme.light);
-  static const _key = 'reading_theme';
+  /// [prefix]: '' for the normal app, 'split_top_' / 'split_bottom_' for the split-view halves.
+  ThemeController([this.prefix = '']) : super(ReadingTheme.light);
+  final String prefix;
+  String get _key => '${prefix}reading_theme';
+
+  /// The theme controller for this part of the screen (a split-view half has its own).
+  static ThemeController of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<ThemeScope>()?.notifier ?? themeController;
 
   Future<void> load() async {
     final name = await Prefs.instance.getString(_key);
@@ -54,6 +61,12 @@ class ThemeController extends ValueNotifier<ReadingTheme> {
 }
 
 final themeController = ThemeController();
+
+/// Gives a part of the screen its own theme (used by the split view).
+class ThemeScope extends InheritedNotifier<ThemeController> {
+  const ThemeScope({super.key, required ThemeController controller, required super.child})
+      : super(notifier: controller);
+}
 
 /// Palette button for app bars: opens the theme picker.
 class ThemeButton extends StatelessWidget {
@@ -78,7 +91,7 @@ class _ThemePicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<ReadingTheme>(
-      valueListenable: themeController,
+      valueListenable: ThemeController.of(context),
       builder: (context, current, _) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
@@ -96,7 +109,7 @@ class _ThemePicker extends StatelessWidget {
                     _ThemeSwatch(
                       theme: t,
                       selected: t == current,
-                      onTap: () => themeController.set(t),
+                      onTap: () => ThemeController.of(context).set(t),
                     ),
                 ],
               ),
@@ -135,7 +148,7 @@ class _ThemeSwatch extends StatelessWidget {
                   width: selected ? 3 : 1,
                 ),
               ),
-              child: Text('அ',
+              child: Text(appProfile.englishOnly ? 'A' : 'அ',
                   style: TextStyle(color: theme.text, fontSize: 20, fontWeight: FontWeight.w600)),
             ),
             const SizedBox(height: 6),
@@ -151,5 +164,9 @@ class _ThemeSwatch extends StatelessWidget {
 
 /// Opens the theme picker (from the ⋮ menu).
 void showThemePicker(BuildContext context) {
-  showModalBottomSheet(context: context, builder: (_) => const _ThemePicker());
+  final controller = ThemeController.of(context);
+  showModalBottomSheet(
+    context: context,
+    builder: (_) => ThemeScope(controller: controller, child: const _ThemePicker()),
+  );
 }

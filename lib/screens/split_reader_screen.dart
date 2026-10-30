@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../data/library.dart';
 import '../models/message.dart';
 import '../widgets/more_menu.dart';
-import 'combined_reader_screen.dart';
 import 'message_lang_switch.dart';
 import 'reader_screen.dart';
 import 'section_switch.dart';
@@ -116,13 +115,7 @@ class _SplitReaderScreenState extends State<SplitReaderScreen> {
   /// "Both ⋮" → Normal view: one reader, Tamil paragraph with its English below.
   void _viewChanged() {
     if (!mounted || messageSplit.value) return;
-    final p = _link.currentParagraph('ta');
-    Navigator.of(context).pushReplacement(PageRouteBuilder(
-      transitionDuration: const Duration(milliseconds: 200),
-      pageBuilder: (_, __, ___) =>
-          CombinedReaderScreen(tamil: widget.tamil, english: widget.english, initialTamilParagraph: p),
-      transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
-    ));
+    _single('ta');
   }
 
   /// Leaves the split view for one language, at the paragraph being read.

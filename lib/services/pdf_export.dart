@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_file_dialog/flutter_file_dialog.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import '../l10n.dart';
 
 /// One block of the PDF: a title, an info line, a paragraph or a verse.
 class PdfBlock {
@@ -46,14 +47,14 @@ class PdfExport {
       {required String fileName, required List<PdfBlock> blocks}) async {
     final messenger = ScaffoldMessenger.of(context);
     messenger.showSnackBar(const SnackBar(
-      content: Text('PDF தயாராகிறது… / Making the PDF…'),
+      content: Tr('PDF தயாராகிறது… / Making the PDF…'),
       duration: Duration(seconds: 30),
     ));
     try {
       final ok = await save(fileName: fileName, blocks: blocks);
       messenger.hideCurrentSnackBar();
       if (ok) {
-        messenger.showSnackBar(const SnackBar(content: Text('PDF சேமிக்கப்பட்டது / PDF saved')));
+        messenger.showSnackBar(const SnackBar(content: Tr('PDF சேமிக்கப்பட்டது / PDF saved')));
       }
     } catch (e) {
       messenger.hideCurrentSnackBar();

@@ -11,19 +11,27 @@ import '../data/reader_store.dart';
 import '../models/highlight.dart';
 import '../services/pdf_export.dart';
 import '../theme/reading_theme.dart';
+import '../theme/text_settings.dart';
 import '../widgets/marking.dart';
 import 'bible_mode_switch.dart';
+import '../data/bookmarks.dart';
+import '../services/share_quote.dart';
 import 'notes_screen.dart';
+import 'read_along.dart';
 import 'section_switch.dart';
+import 'split_app_screen.dart';
+import '../data/profile.dart';
 import '../widgets/more_menu.dart';
+import '../l10n.dart';
 
 /// Reads one book of the Bible in Tamil, English (KJV), or both.
 /// Swipe left/right (or use the arrows) to change chapter.
 class BibleReaderScreen extends StatefulWidget {
   final BibleBookInfo book;
   final int initialChapter; // 1-based
+  final int? initialVerse; // 1-based: open with this verse at the top (Scripture links, bookmarks)
 
-  const BibleReaderScreen({super.key, required this.book, this.initialChapter = 1});
+  const BibleReaderScreen({super.key, required this.book, this.initialChapter = 1, this.initialVerse});
 
   @override
   State<BibleReaderScreen> createState() => _BibleReaderScreenState();
@@ -37,30 +45,57 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
   late final PageController _pages = PageController(initialPage: widget.initialChapter - 1);
   late int _chapter = widget.initialChapter;
   double _fontSize = 20;
+  int? _resumeToken;
+
+  // Read along (split view): position = chapter * 1000 + verse.
+  final Map<int, GlobalKey<_ChapterPageState>> _pageKeys = {};
+  int? _half;
+  ReadAlongTarget? _readAlong;
+  bool _followingChapter = false;
+
+  void _followPosition(int position, double fraction) {
+    final chapter = position ~/ 1000, verse = position % 1000;
+    if (chapter < 1 || chapter > widget.book.chapterCount) return;
+    if (chapter != _chapter && _pages.hasClients) {
+      _followingChapter = true;
+      _pages.jumpToPage(chapter - 1);
+      _followingChapter = false;
+      WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _pageKeys[chapter]?.currentState?.followVerse(verse, fraction));
+    } else {
+      _pageKeys[chapter]?.currentState?.followVerse(verse, fraction);
+    }
+  }
 
   BibleMode get _mode => bibleMode.value;
   List<List<String>>? _tamil;
   List<List<String>>? _english;
 
   // Both languages are always loaded: marks made in one are copied to the other.
-  bool get _needTamil => true;
+  // Both languages are loaded (marks are copied between them) — English only for English-only readers.
+  bool get _needTamil => !appProfile.englishOnly;
   bool get _needEnglish => true;
-  bool get _ready => _tamil != null && _english != null;
+  bool get _ready => (_tamil != null || !_needTamil) && _english != null;
 
   @override
   void initState() {
     super.initState();
-    _store.loadFontSize().then((s) {
-      if (mounted) setState(() => _fontSize = s);
-    });
     bibleMode.addListener(_onModeChanged);
     bibleSplit.addListener(_onModeChanged);
+    // Reopen here next time the app starts (not inside the split view).
+    if (!appSplitOpen.value) _resumeToken = ResumeTracker.opened('bible');
     _loadTexts();
     _remember();
   }
 
   /// Remembers this place, so the Bible button in the Messages comes back here.
-  void _remember() => Prefs.instance.set('last_bible', '${widget.book.number}:$_chapter');
+  void _remember() {
+    Prefs.instance.set('last_bible', '${widget.book.number}:$_chapter');
+    final ta = _tamil, en = _english;
+    String? first(List<List<String>>? book) =>
+        book != null && _chapter - 1 < book.length && book[_chapter - 1].isNotEmpty ? book[_chapter - 1][0] : null;
+    setReadingPreview(ta: first(ta), en: first(en));
+  }
 
   void _onModeChanged() {
     if (!mounted) return;
@@ -77,19 +112,55 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
       final e = await Bible.instance.chapters(widget.book, BibleLang.english);
       if (mounted) setState(() => _english = e);
     }
+    if (mounted) _remember();
+    // Opened at a verse: bring it to the top once the chapter is laid out.
+    final v = widget.initialVerse;
+    if (v != null && v > 1 && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _pageKeys[widget.initialChapter]?.currentState?.followVerse(v - 1, 0);
+        });
+      });
+    }
   }
 
   @override
   void dispose() {
+    final token = _resumeToken;
+    if (token != null) ResumeTracker.closed(token);
+    final ra = _readAlong, half = _half;
+    if (ra != null && half != null) ReadAlong.instance.detach(half, ra);
     bibleMode.removeListener(_onModeChanged);
+    _ts?.removeListener(_textChanged);
     bibleSplit.removeListener(_onModeChanged);
     _pages.dispose();
     super.dispose();
   }
 
-  void _setFont(double size) {
-    setState(() => _fontSize = size.clamp(_minFont, _maxFont).toDouble());
-    _store.saveFontSize(_fontSize);
+  // Text settings for this part of the screen (a split-view half has its own).
+  TextSettingsController? _ts;
+  TextSettingsController get ts => _ts ?? textSettings;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final half = SplitHalf.of(context);
+    if (half != null && _readAlong == null) {
+      _half = half;
+      _readAlong = ReadAlongTarget(kind: 'bible', key: '${widget.book.number}', follow: _followPosition);
+      ReadAlong.instance.attach(half, _readAlong!);
+    }
+    final c = TextSettingsController.of(context);
+    if (!identical(c, _ts)) {
+      _ts?.removeListener(_textChanged);
+      _ts = c;
+      c.addListener(_textChanged);
+      _fontSize = c.value.size;
+    }
+  }
+
+  void _textChanged() {
+    if (mounted) setState(() => _fontSize = ts.value.size);
   }
 
   void _goTo(int chapter) {
@@ -100,9 +171,9 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
   /// Saves the chapter on screen as a PDF (in the chosen language), with its marks.
   Future<void> _savePdf() async {
     final ta = _tamil, en = _english;
-    if (ta == null || en == null) return;
+    if (en == null) return;
     final c = _chapter;
-    final taVerses = c - 1 < ta.length ? ta[c - 1] : const <String>[];
+    final taVerses = ta != null && c - 1 < ta.length ? ta[c - 1] : const <String>[];
     final enVerses = c - 1 < en.length ? en[c - 1] : const <String>[];
     final taMarks = await _store.loadHighlights('bible_ta_${widget.book.number}_$c');
     final enMarks = await _store.loadHighlights('bible_en_${widget.book.number}_$c');
@@ -170,7 +241,7 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final textColor = theme.colorScheme.onSurface;
+    final textColor = ts.value.textColor(context, theme.colorScheme.onSurface);
     final numberColor = theme.colorScheme.primary;
     final total = widget.book.chapterCount;
 
@@ -187,23 +258,20 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
           ),
         ),
         actions: [
-          IconButton(
-            tooltip: 'Smaller text',
-            icon: const Text('A−', style: TextStyle(fontSize: 16)),
-            onPressed: () => _setFont(_fontSize - 2),
-          ),
-          IconButton(
-            tooltip: 'Bigger text',
-            icon: const Text('A+', style: TextStyle(fontSize: 22)),
-            onPressed: () => _setFont(_fontSize + 2),
-          ),
           const GoToMessagesButton(),
-          MoreMenu(onPdf: _savePdf),
+          MoreMenu(
+            bible: true, // Tamil tab → Tamil menu; English or Both → English
+            onPdf: _savePdf,
+            // Opens this chapter in the top half; main menu below.
+            splitTop: (_) => BibleReaderScreen(book: widget.book, initialChapter: _chapter),
+          ),
         ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(52),
-          child: const BibleModeSwitch(),
-        ),
+        bottom: appProfile.englishOnly
+            ? null
+            : const PreferredSize(
+                preferredSize: Size.fromHeight(52),
+                child: BibleModeSwitch(),
+              ),
       ),
       body: !_ready
           ? const Center(child: CircularProgressIndicator())
@@ -213,22 +281,28 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
               onPageChanged: (i) {
                 setState(() => _chapter = i + 1);
                 _remember();
+                // Read along: the other half turns to the same chapter.
+                final half = _half;
+                if (half != null && !_followingChapter) ReadAlong.instance.moved(half, (i + 1) * 1000, 0);
               },
               itemBuilder: (_, i) => _ChapterPage(
-                key: ValueKey('${widget.book.number}-${i + 1}'),
+                key: _pageKeys.putIfAbsent(i + 1, () => GlobalKey<_ChapterPageState>()),
                 book: widget.book.number,
                 bookTamil: widget.book.tamil,
                 bookEnglish: widget.book.english,
                 chapter: i + 1,
                 title: '$_bookName ${i + 1}',
-                tamil: i < _tamil!.length ? _tamil![i] : const [],
+                tamil: _tamil != null && i < _tamil!.length ? _tamil![i] : const [],
                 english: i < _english!.length ? _english![i] : const [],
                 showTamil: _mode != BibleMode.english,
                 showEnglish: _mode != BibleMode.tamil,
-                split: bibleSplit.value,
+                split: false,
                 fontSize: _fontSize,
                 textColor: textColor,
                 numberColor: numberColor,
+                onUserScroll: _half == null
+                    ? null
+                    : (v, f) => ReadAlong.instance.moved(_half!, (i + 1) * 1000 + v, f),
               ),
             ),
       bottomNavigationBar: total <= 1
@@ -283,6 +357,7 @@ class _ChapterPage extends StatefulWidget {
     required this.fontSize,
     required this.textColor,
     required this.numberColor,
+    this.onUserScroll,
   });
 
   final int book;
@@ -298,6 +373,7 @@ class _ChapterPage extends StatefulWidget {
   final double fontSize;
   final Color textColor;
   final Color numberColor;
+  final void Function(int verse, double fraction)? onUserScroll; // read along
 
   @override
   State<_ChapterPage> createState() => _ChapterPageState();
@@ -319,6 +395,12 @@ class _ChapterPageState extends State<_ChapterPage> {
   void initState() {
     super.initState();
     _loadMarks();
+    HighlightEvents.instance.addListener(_onHighlightsDeleted);
+  }
+
+  void _onHighlightsDeleted() {
+    final id = HighlightEvents.instance.last;
+    if (id == _taKey || id == _enKey) _loadMarks();
   }
 
   Future<void> _loadMarks() async {
@@ -334,6 +416,7 @@ class _ChapterPageState extends State<_ChapterPage> {
 
   @override
   void dispose() {
+    HighlightEvents.instance.removeListener(_onHighlightsDeleted);
     _scroll.dispose();
     _scrollTa.dispose();
     _scrollEn.dispose();
@@ -449,6 +532,48 @@ class _ChapterPageState extends State<_ChapterPage> {
     setState(() => _sel = null);
   }
 
+  /// 🔖 Bookmarks the first chosen verse.
+  Future<void> _bookmark() async {
+    final sel = _sel;
+    if (sel == null) return;
+    final name = sel.en ? widget.bookEnglish : widget.bookTamil;
+    final text = _texts(sel.en)[sel.v1];
+    final added = await BookmarkStore.instance.add(Bookmark(
+      kind: 'bible',
+      lang: sel.en ? 'en' : 'ta',
+      code: '${widget.book}',
+      place: widget.chapter,
+      verse: sel.v1,
+      title: '$name ${widget.chapter}:${sel.v1 + 1}',
+      snippet: text.length > 140 ? '${text.substring(0, 140)}…' : text,
+      at: DateTime.now(),
+    ));
+    if (!mounted) return;
+    setState(() => _sel = null);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(BookmarkStore.message(added, sel.en)),
+      duration: Duration(seconds: added == BookmarkResult.full ? 4 : 1),
+    ));
+  }
+
+  /// Shares the chosen verses as a picture.
+  void _share() {
+    final sel = _sel;
+    if (sel == null) return;
+    final parts = <String>[];
+    _forEachSelected((en, v, s, e) => parts.add(_texts(en)[v].substring(s, e).trim()));
+    final name = sel.en ? widget.bookEnglish : widget.bookTamil;
+    final verses = sel.v1 == sel.v2 ? '${sel.v1 + 1}' : '${sel.v1 + 1}-${sel.v2 + 1}';
+    final ts = TextSettingsController.of(context).value;
+    ShareQuote.share(
+      context,
+      quote: parts.join(' '),
+      source: '$name ${widget.chapter}:$verses${sel.en ? ' (KJV)' : ''}',
+      style: ts.style(context, sel.en ? 'en' : 'ta', Colors.black),
+    );
+    setState(() => _sel = null);
+  }
+
   void _copy() {
     final parts = <String>[];
     _forEachSelected((en, v, s, e) => parts.add('${v + 1}  ${_texts(en)[v].substring(s, e)}'));
@@ -482,6 +607,10 @@ class _ChapterPageState extends State<_ChapterPage> {
     final taEnd = showTa ? taStart + widget.tamil[v].length : taStart;
     if (showTa) {
       children.add(TextSpan(
+        style: TextStyle(
+            fontFamily: TextSettingsController.of(context).value.family('ta'),
+            fontFamilyFallback: TextSettingsController.of(context).value.fallback('ta'),
+            fontStyle: TextSettingsController.of(context).value.fontStyle('ta')),
         children: markedSpans(widget.tamil[v], _taMarks.where((h) => h.paragraph == v),
             chosen: _selIn(false, v), chosenColor: chosenColor),
       ));
@@ -490,9 +619,13 @@ class _ChapterPageState extends State<_ChapterPage> {
     final enStart = both ? taEnd + 1 : taStart;
     if (showEn) {
       children.add(TextSpan(
-        style: both
-            ? TextStyle(fontSize: widget.fontSize * 0.9, fontStyle: FontStyle.italic, color: englishColor)
-            : null,
+        style: TextStyle(
+          fontSize: both ? widget.fontSize * 0.9 : null,
+          fontStyle: both ? FontStyle.italic : TextSettingsController.of(context).value.fontStyle('en'),
+          color: both ? englishColor : null,
+          fontFamily: TextSettingsController.of(context).value.family('en'),
+          fontFamilyFallback: TextSettingsController.of(context).value.fallback('en'),
+        ),
         children: markedSpans(widget.english[v], _enMarks.where((h) => h.paragraph == v),
             chosen: _selIn(true, v), chosenColor: chosenColor),
       ));
@@ -515,7 +648,9 @@ class _ChapterPageState extends State<_ChapterPage> {
 
     Offset? downLocal, downGlobal;
     return Padding(
-      key: onlyEnglish == null ? null : _paneKeys[onlyEnglish]!.putIfAbsent(v, () => GlobalKey()),
+      key: onlyEnglish == null
+          ? _verseKeys.putIfAbsent(v, () => GlobalKey())
+          : _paneKeys[onlyEnglish]!.putIfAbsent(v, () => GlobalKey()),
       padding: EdgeInsets.only(bottom: both ? 18 : 12),
       // Tap = choose the line (tap more lines to stretch). Long press / double tap = send to MyNotes.
       child: GestureDetector(
@@ -544,6 +679,60 @@ class _ChapterPageState extends State<_ChapterPage> {
   }
 
   final Map<String, GlobalKey> _textKeys = {};
+
+  // ---------------- read along (split view) ----------------
+
+  final Map<int, GlobalKey> _verseKeys = {};
+  bool _userScrolling = false;
+  bool _jumpingTo = false;
+
+  bool _onScroll(ScrollNotification n) {
+    if (n.depth != 0 || widget.onUserScroll == null) return false;
+    if (n is UserScrollNotification) {
+      _userScrolling = n.direction != ScrollDirection.idle;
+    } else if (n is ScrollStartNotification && n.dragDetails != null) {
+      _userScrolling = true;
+    }
+    if (n is ScrollUpdateNotification && _userScrolling && !_jumpingTo) {
+      final (v, f) = _topVerse();
+      widget.onUserScroll!(v, f);
+    }
+    return false;
+  }
+
+  /// The verse at the top (0-based) and how far into it.
+  (int, double) _topVerse() {
+    if (!_scroll.hasClients) return (0, 0);
+    final viewport = _scroll.position.context.storageContext.findRenderObject();
+    if (viewport is! RenderBox) return (0, 0);
+    final top = viewport.localToGlobal(Offset.zero).dy;
+    final verses = _verseKeys.keys.toList()..sort();
+    for (final v in verses) {
+      final box = _verseKeys[v]!.currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.attached) continue;
+      final boxTop = box.localToGlobal(Offset.zero).dy;
+      if (boxTop + box.size.height > top) {
+        return (v, box.size.height <= 0 ? 0 : ((top - boxTop) / box.size.height).clamp(0.0, 1.0));
+      }
+    }
+    return (0, 0);
+  }
+
+  /// Scrolls so that verse [v] (at [fraction]) is at the top.
+  void followVerse(int v, double fraction) {
+    if (_userScrolling || !_scroll.hasClients || _verseKeys.isEmpty) return;
+    final last = _verseKeys.keys.reduce(math.max);
+    final box = _verseKeys[math.min(v, last)]?.currentContext?.findRenderObject();
+    if (box is! RenderBox) return;
+    final viewport = RenderAbstractViewport.maybeOf(box);
+    if (viewport == null) return;
+    final start = viewport.getOffsetToReveal(box, 0).offset;
+    final target = (start + fraction * box.size.height)
+        .clamp(_scroll.position.minScrollExtent, _scroll.position.maxScrollExtent);
+    _jumpingTo = true;
+    _scroll.jumpTo(target);
+    _jumpingTo = false;
+  }
 
   // ---------------- split view: Tamil above, English below ----------------
 
@@ -663,7 +852,7 @@ class _ChapterPageState extends State<_ChapterPage> {
           value: 'notes',
           child: ListTile(
             leading: Icon(Icons.note_add_outlined),
-            title: Text('குறிப்பில் சேர் / Send to notes'),
+            title: Tr('குறிப்பில் சேர் / Send to notes'),
             contentPadding: EdgeInsets.zero,
           ),
         ),
@@ -691,33 +880,28 @@ class _ChapterPageState extends State<_ChapterPage> {
             ],
           )
         else
-        RawScrollbar(
-          controller: _scroll,
-          thumbVisibility: true,
-          interactive: true,
-          thickness: 8,
-          minThumbLength: 56,
-          radius: const Radius.circular(8),
-          crossAxisMargin: 3,
-          thumbColor: widget.textColor.withValues(alpha: 0.35),
-          child: ListView.builder(
+        NotificationListener<ScrollNotification>(
+          onNotification: _onScroll,
+          child: RawScrollbar(
             controller: _scroll,
-            padding: EdgeInsets.fromLTRB(20, 12, 24, _sel == null ? 48 : 110),
-            itemCount: count + 1,
-            itemBuilder: (_, i) {
-              if (i == 0) {
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: Text(widget.title,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                          fontSize: widget.fontSize + 4,
-                          fontWeight: FontWeight.w700,
-                          color: widget.textColor)),
-                );
-              }
-              return _verse(i);
-            },
+            thumbVisibility: true,
+            interactive: true,
+            thickness: 8,
+            minThumbLength: 56,
+            radius: const Radius.circular(8),
+            crossAxisMargin: 3,
+            thumbColor: widget.textColor.withValues(alpha: 0.35),
+            child: SingleChildScrollView(
+              controller: _scroll,
+              padding: EdgeInsets.fromLTRB(20, 12, 24, _sel == null ? 48 : 110),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _chapterTitle(),
+                  for (var i = 1; i <= count; i++) _verse(i),
+                ],
+              ),
+            ),
           ),
         ),
         if (_sel != null)
@@ -728,9 +912,10 @@ class _ChapterPageState extends State<_ChapterPage> {
             child: MarkBar(
               onColor: (c) => _apply(MarkStyle.color, c),
               onBold: () => _apply(MarkStyle.bold),
-              onUnderline: () => _apply(MarkStyle.underline),
               onCopy: _copy,
               onSendToNotes: _sendToNotes,
+              onBookmark: _bookmark,
+              onShare: _share,
               onClear: _clear,
               onClose: () => setState(() => _sel = null),
             ),

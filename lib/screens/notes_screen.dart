@@ -6,6 +6,7 @@ import '../data/notes.dart';
 import '../services/pdf_export.dart';
 import '../widgets/more_menu.dart';
 import 'section_switch.dart';
+import '../l10n.dart';
 
 /// Opens MyNotes.
 void openNotes(BuildContext context) {
@@ -27,7 +28,7 @@ Future<void> sendToNotes(BuildContext context, String quote, String reference) a
   await store.append(note, quote, reference);
   if (!context.mounted) return;
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-    content: Text('குறிப்பில் சேர்க்கப்பட்டது / Added to "${note.title}"'),
+    content: Tr('குறிப்பில் சேர்க்கப்பட்டது / Added to "${note.title}"'),
     duration: const Duration(seconds: 2),
   ));
 }
@@ -44,7 +45,7 @@ Future<Note?> _pickNote(BuildContext context) async {
         children: [
           const Padding(
             padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
-            child: Text('எந்த குறிப்பில் சேர்க்க? / Add to which note?',
+            child: Tr('எந்த குறிப்பில் சேர்க்க? / Add to which note?',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
           ),
           for (final (i, n) in store.notes.indexed)
@@ -55,7 +56,7 @@ Future<Note?> _pickNote(BuildContext context) async {
             ),
           ListTile(
             leading: const Icon(Icons.add),
-            title: const Text('புதிய குறிப்பு / New note'),
+            title: const Tr('புதிய குறிப்பு / New note'),
             onTap: () async {
               final title = await _askTitle(ctx);
               if (title == null) return;
@@ -96,24 +97,24 @@ Future<String?> _askTitle(BuildContext context, {String initial = '', bool renam
   return showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: Text(rename ? 'பெயர் மாற்று / Rename' : 'புதிய குறிப்பு / New note'),
+      title: Text(tr(rename ? 'பெயர் மாற்று / Rename' : 'புதிய குறிப்பு / New note')),
       content: TextField(
         controller: controller,
         autofocus: true,
         textCapitalization: TextCapitalization.sentences,
-        decoration: const InputDecoration(hintText: 'தலைப்பு / Title'),
+        decoration: InputDecoration(hintText: tr('தலைப்பு / Title')),
         onSubmitted: (v) {
           if (v.trim().isNotEmpty) Navigator.of(ctx).pop(v.trim());
         },
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('ரத்து / Cancel')),
+        TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Tr('ரத்து / Cancel')),
         FilledButton(
           onPressed: () {
             final v = controller.text.trim();
             if (v.isNotEmpty) Navigator.of(ctx).pop(v);
           },
-          child: Text(rename ? 'சேமி / Save' : 'உருவாக்கு / Create'),
+          child: Text(tr(rename ? 'சேமி / Save' : 'உருவாக்கு / Create')),
         ),
       ],
     ),
@@ -152,7 +153,7 @@ class _NotesScreenState extends State<NotesScreen> {
   Future<void> _create() async {
     if (_store.notes.length >= NotesStore.maxNotes) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('அதிகபட்சம் 50 குறிப்புகள் / You can keep up to 50 notes')));
+          content: Tr('அதிகபட்சம் 50 குறிப்புகள் / You can keep up to 50 notes')));
       return;
     }
     final title = await _askTitle(context);
@@ -178,23 +179,23 @@ class _NotesScreenState extends State<NotesScreen> {
             ),
             ListTile(
               leading: Icon(isActive ? Icons.push_pin : Icons.push_pin_outlined),
-              title: Text(isActive
+              title: Text(tr(isActive
                   ? 'தயாரிப்பை நிறுத்து / Stop preparing this note'
-                  : 'இந்த குறிப்பை தயார் செய் / Prepare this note'),
+                  : 'இந்த குறிப்பை தயார் செய் / Prepare this note')),
               subtitle: isActive
                   ? null
-                  : const Text('வசனங்களும் மேற்கோள்களும் இதில் சேர்க்கப்படும்\n'
+                  : const Tr('வசனங்களும் மேற்கோள்களும் இதில் சேர்க்கப்படும்\n'
                       'Verses and quotes you send will be added here'),
               onTap: () => Navigator.of(ctx).pop('prepare'),
             ),
             ListTile(
               leading: const Icon(Icons.edit_outlined),
-              title: const Text('பெயர் மாற்று / Rename'),
+              title: const Tr('பெயர் மாற்று / Rename'),
               onTap: () => Navigator.of(ctx).pop('rename'),
             ),
             ListTile(
               leading: const Icon(Icons.delete_outline),
-              title: const Text('நீக்கு / Delete'),
+              title: const Tr('நீக்கு / Delete'),
               onTap: () => Navigator.of(ctx).pop('delete'),
             ),
           ],
@@ -207,7 +208,7 @@ class _NotesScreenState extends State<NotesScreen> {
         await _store.setActive(isActive ? null : n);
         if (!mounted || isActive) return;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('"${n.title}" தயார். வேதாகமம் அல்லது செய்தியில் வரியைத் தட்டி 📝 அழுத்தவும்.\n'
+          content: Tr('"${n.title}" தயார். வேதாகமம் அல்லது செய்தியில் வரியைத் தட்டி 📝 அழுத்தவும்.\n'
               'Ready. In the Bible or a message, tap a line, then 📝.'),
           duration: const Duration(seconds: 4),
         ));
@@ -218,11 +219,11 @@ class _NotesScreenState extends State<NotesScreen> {
         final ok = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: Text('"${n.title}" நீக்கவா? / Delete?'),
-            content: const Text('இதை திரும்பப் பெற முடியாது. / This cannot be undone.'),
+            title: Tr('"${n.title}" நீக்கவா? / Delete?'),
+            content: const Tr('இதை திரும்பப் பெற முடியாது. / This cannot be undone.'),
             actions: [
-              TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('ரத்து / Cancel')),
-              FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('நீக்கு / Delete')),
+              TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Tr('ரத்து / Cancel')),
+              FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Tr('நீக்கு / Delete')),
             ],
           ),
         );
@@ -269,7 +270,7 @@ class _NotesScreenState extends State<NotesScreen> {
               child: FilledButton.icon(
                 onPressed: _create,
                 icon: const Icon(Icons.add),
-                label: Text('புதிய குறிப்பு / New note  (${notes.length}/${NotesStore.maxNotes})'),
+                label: Tr('புதிய குறிப்பு / New note  (${notes.length}/${NotesStore.maxNotes})'),
               ),
             ),
           ),
@@ -278,7 +279,7 @@ class _NotesScreenState extends State<NotesScreen> {
                 ? const Center(
                     child: Padding(
                       padding: EdgeInsets.all(24),
-                      child: Text(
+                      child: Tr(
                         'குறிப்புகள் இல்லை. ＋ அழுத்தி புதிய குறிப்பை உருவாக்கவும்.\n\n'
                         'No notes yet. Tap + to make one.',
                         textAlign: TextAlign.center,
@@ -304,7 +305,7 @@ class _NotesScreenState extends State<NotesScreen> {
                           trailing: active
                               ? Chip(
                                   avatar: Icon(Icons.push_pin, size: 16, color: theme.colorScheme.primary),
-                                  label: const Text('தயார் / Ready'),
+                                  label: const Tr('தயார் / Ready'),
                                   visualDensity: VisualDensity.compact,
                                 )
                               : null,
@@ -409,9 +410,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             keyboardType: TextInputType.multiline,
             textCapitalization: TextCapitalization.sentences,
             style: const TextStyle(fontSize: 18, height: 1.6),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               border: InputBorder.none,
-              hintText: 'இங்கே எழுதுங்கள்… / Write here…',
+              hintText: tr('இங்கே எழுதுங்கள்… / Write here…'),
             ),
           ),
         ),

@@ -1,10 +1,19 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 
 import '../firebase_options.dart';
 import 'local_files.dart';
+import 'news.dart';
+import 'series.dart';
+import 'profile.dart';
+
+/// Unpacks a compressed message (runs in a background isolate).
+String _unpack(String z) => utf8.decode(gzip.decode(base64.decode(z)));
 
 /// Result of checking the cloud for messages.
 class SyncResult {
@@ -43,7 +52,21 @@ class Cloud {
     if (Firebase.apps.isEmpty) throw StateError('Could not connect to the server');
   }
 
-  FirebaseFirestore get _db => FirebaseFirestore.instance;
+  bool _configured = false;
+
+  FirebaseFirestore get _db {
+    final db = FirebaseFirestore.instance;
+    if (!_configured) {
+      _configured = true;
+      // Don't keep a second copy of every downloaded message in Firestore's own cache:
+      // the app saves them itself. (That cache made the phone very slow while hundreds
+      // of new messages arrived.)
+      try {
+        db.settings = const Settings(persistenceEnabled: false);
+      } catch (_) {}
+    }
+    return db;
+  }
 
   Future<DocumentSnapshot<Map<String, dynamic>>> _get(String path) =>
       _db.doc(path).get(const GetOptions(source: Source.server)).timeout(_timeout);
@@ -65,6 +88,12 @@ class Cloud {
     _syncing = true;
     try {
       await _ready();
+      // The series list (Year / Series tab): small, updated when it changes.
+      try {
+        await _syncSeries();
+      } catch (_) {}
+      // English-only readers: just the English messages.
+      if (appProfile.englishOnly) return await _syncLang('en', onProgress: onProgress);
       // Tamil first (it must succeed); English is optional (may not be uploaded yet).
       final ta = await _syncLang('ta', onProgress: onProgress);
       var en = const SyncResult();
@@ -107,27 +136,45 @@ class Cloud {
     var done = 0;
     onProgress?.call(0, toFetch.length);
 
-    for (final it in toFetch) {
+    // Fetch one message's text: the compressed copy (much smaller) when there is one.
+    Future<String?> fetch(Map<String, dynamic> it) async {
       final code = it['code'] as String;
-      final doc = await _get('$folder/$code');
-      final json = doc.data()?['json'] as String?;
-      if (json == null) continue;
-      await files.writeString('$folder/$code.json', json);
-      final isNew = !local.containsKey(code);
-      local[code] = {
-        'code': code,
-        'title': it['title'],
-        'file': '$code.json',
-        'version': it['version'],
-      };
-      if (isNew && !firstDownload) {
-        newTitles.add(it['title'] as String);
-        newCodes.add(code);
-      } else if (!isNew) {
-        corrected++;
+      if (it['z'] == true) {
+        final z = (await _get('${folder}_z/$code')).data()?['z'] as String?;
+        // Unpacking runs in the background, so the screen never freezes.
+        if (z != null) return compute(_unpack, z);
       }
-      done++;
+      return (await _get('$folder/$code')).data()?['json'] as String?;
+    }
+
+    // Several at a time, so hundreds of messages download quickly.
+    const batch = 4;
+    for (var start = 0; start < toFetch.length; start += batch) {
+      final part = toFetch.sublist(start, (start + batch).clamp(0, toFetch.length));
+      final texts = await Future.wait(part.map(fetch));
+      for (var k = 0; k < part.length; k++) {
+        final it = part[k];
+        final json = texts[k];
+        if (json == null) continue;
+        final code = it['code'] as String;
+        await files.writeString('$folder/$code.json', json);
+        final isNew = !local.containsKey(code);
+        local[code] = {
+          'code': code,
+          'title': it['title'],
+          'file': '$code.json',
+          'version': it['version'],
+        };
+        if (isNew && !firstDownload) {
+          newTitles.add(it['title'] as String);
+          newCodes.add(code);
+        } else if (!isNew) {
+          corrected++;
+        }
+        done++;
+      }
       onProgress?.call(done, toFetch.length);
+      await Future<void>.delayed(const Duration(milliseconds: 30)); // let the screen breathe
     }
 
     // Remove messages that were taken off the cloud.
@@ -144,7 +191,50 @@ class Cloud {
     if (index.isNotEmpty || localList.isNotEmpty) {
       await files.writeJson('$folder/index.json', index);
     }
+    // Remember them for ⋮ → Notifications (orange dot).
+    final now = DateTime.now();
+    await NewsStore.instance.add([
+      for (var i = 0; i < newCodes.length; i++)
+        NewsItem(code: newCodes[i], title: newTitles[i], lang: lang, at: now),
+    ]);
     return SyncResult(newTitles: newTitles, newCodes: newCodes, corrected: corrected);
+  }
+
+  // ---------------- Series ----------------
+
+  /// catalog/series {version, json}: the message series, saved as series.json.
+  Future<void> _syncSeries() async {
+    final files = LocalFiles.instance;
+    final snap = await _get('catalog/series');
+    final data = snap.data();
+    final json = data?['json'] as String?;
+    final version = data?['version']?.toString();
+    if (json == null || version == null) return;
+    final mine = await files.readString('series.version');
+    if (mine == version && await files.readString('series.json') != null) return;
+    await files.writeString('series.json', json);
+    await files.writeString('series.version', version);
+    SeriesStore.instance.reload();
+  }
+
+  // ---------------- Feedback ----------------
+
+  /// Sends one feedback (≤ 200 letters). Only the app owner can read feedback.
+  Future<void> sendFeedback({
+    required String text,
+    String? name,
+    String? contact,
+    required Map<String, dynamic> about,
+  }) async {
+    await _ready();
+    await _db.collection('feedback').add({
+      'text': text,
+      'name': name ?? '',
+      'contact': contact ?? '',
+      'seen': false,
+      'createdAt': FieldValue.serverTimestamp(),
+      ...about,
+    }).timeout(_timeout);
   }
 
   // ---------------- Bible ----------------
@@ -157,10 +247,11 @@ class Cloud {
     final booksJson = meta.data()?['books'] as String?;
     if (booksJson == null) throw StateError('Bible is not uploaded yet');
 
-    const total = 132;
+    final langs = appProfile.englishOnly ? const ['en'] : const ['ta', 'en'];
+    final total = 66 * langs.length;
     var done = 0;
     onProgress?.call(0, total);
-    for (final lang in const ['ta', 'en']) {
+    for (final lang in langs) {
       final snap = await _db
           .collection('bible_$lang')
           .get(const GetOptions(source: Source.server))

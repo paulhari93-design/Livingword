@@ -64,3 +64,8 @@ LivingWord-old-phones.apk
 *.aab
 _test/
 _update*
+
+# Claude update packages and files set aside
+_to_delete/
+*.tgz
+*.md5

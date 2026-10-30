@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/library.dart';
+import '../l10n.dart';
 
 /// [ தமிழ் | English ] switch for the messages (list and reader).
 class MessageLangSwitch extends StatelessWidget {
@@ -60,12 +61,12 @@ class _BothLabel extends StatelessWidget {
               CheckedPopupMenuItem(
                 value: false,
                 checked: !split,
-                child: const Text('சாதாரண பார்வை / Normal view'),
+                child: const Tr('சாதாரண பார்வை / Normal view'),
               ),
               CheckedPopupMenuItem(
                 value: true,
                 checked: split,
-                child: const Text('பிரிக்கப்பட்ட பார்வை / Split view'),
+                child: const Tr('பிரிக்கப்பட்ட பார்வை / Split view'),
               ),
             ],
           ),

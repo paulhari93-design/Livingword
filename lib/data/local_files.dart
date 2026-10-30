@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 import 'prefs.dart';
+import 'profile.dart';
 
 /// Files saved in the app's private folder on the phone (not visible to other apps).
 ///
@@ -74,7 +75,7 @@ class LocalFiles {
   /// True when at least one message is saved on the phone.
   Future<bool> get hasMessageFiles async {
     try {
-      final list = await readJson('messages/index.json');
+      final list = await readJson(appProfile.englishOnly ? 'messages_en/index.json' : 'messages/index.json');
       return list is List && list.isNotEmpty;
     } catch (_) {
       return false;
@@ -85,7 +86,9 @@ class LocalFiles {
   Future<bool> get hasBibleFiles async {
     try {
       final books = await readJson('bible/books.json');
-      return books is List && books.isNotEmpty && await exists('bible/ta/01.json');
+      return books is List &&
+          books.isNotEmpty &&
+          await exists(appProfile.englishOnly ? 'bible/en/01.json' : 'bible/ta/01.json');
     } catch (_) {
       return false;
     }

@@ -69,20 +69,22 @@ class MarkBar extends StatelessWidget {
     super.key,
     required this.onColor,
     required this.onBold,
-    required this.onUnderline,
     required this.onCopy,
     required this.onClear,
     required this.onClose,
     this.onSendToNotes,
+    this.onBookmark,
+    this.onShare,
   });
 
   final ValueChanged<HighlightColor> onColor;
   final VoidCallback onBold;
-  final VoidCallback onUnderline;
   final VoidCallback onCopy;
   final VoidCallback onClear;
   final VoidCallback onClose;
   final VoidCallback? onSendToNotes; // 📝 add the chosen lines to MyNotes
+  final VoidCallback? onBookmark; // 🔖 bookmark this place
+  final VoidCallback? onShare; // share the chosen words as a picture
 
   @override
   Widget build(BuildContext context) {
@@ -116,11 +118,13 @@ class MarkBar extends StatelessWidget {
               for (final c in HighlightColor.values) dot(c),
               const SizedBox(width: 4),
               IconButton(tooltip: 'Bold', icon: const Icon(Icons.format_bold), onPressed: onBold),
-              IconButton(
-                  tooltip: 'Underline', icon: const Icon(Icons.format_underlined), onPressed: onUnderline),
               if (onSendToNotes != null)
                 IconButton(
                     tooltip: 'Send to notes', icon: const Icon(Icons.note_add_outlined), onPressed: onSendToNotes),
+              if (onBookmark != null)
+                IconButton(tooltip: 'Bookmark', icon: const Icon(Icons.bookmark_add_outlined), onPressed: onBookmark),
+              if (onShare != null)
+                IconButton(tooltip: 'Share as picture', icon: const Icon(Icons.share_outlined), onPressed: onShare),
               IconButton(tooltip: 'Copy', icon: const Icon(Icons.copy), onPressed: onCopy),
               IconButton(tooltip: 'Remove marks', icon: const Icon(Icons.format_clear), onPressed: onClear),
               IconButton(tooltip: 'Close', icon: const Icon(Icons.close), onPressed: onClose),

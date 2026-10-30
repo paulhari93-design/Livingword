@@ -5,7 +5,9 @@ import '../theme/reading_theme.dart';
 import 'bible_mode_switch.dart';
 import 'bible_reader_screen.dart';
 import 'section_switch.dart';
+import '../data/profile.dart';
 import '../widgets/more_menu.dart';
+import '../l10n.dart';
 
 /// Tamil Bible: Old / New Testament book lists, with a book-name filter.
 class BibleBooksScreen extends StatefulWidget {
@@ -87,12 +89,12 @@ class _BibleBooksScreenState extends State<BibleBooksScreen> {
           child: Scaffold(
             appBar: AppBar(
               title: Text(english ? 'Holy Bible' : 'பரிசுத்த வேதாகமம்'),
-              actions: const [GoToMessagesButton(), MoreMenu()],
+              actions: const [GoToMessagesButton(), MoreMenu(bible: true)],
               bottom: PreferredSize(
-                preferredSize: const Size.fromHeight(104),
+                preferredSize: Size.fromHeight(appProfile.englishOnly ? 48 : 104),
                 child: Column(
                   children: [
-                    const BibleModeSwitch(),
+                    if (!appProfile.englishOnly) const BibleModeSwitch(),
                     TabBar(
                       tabs: [
                         Tab(text: english ? 'Old Testament' : 'பழைய ஏற்பாடு'),
@@ -108,10 +110,10 @@ class _BibleBooksScreenState extends State<BibleBooksScreen> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
                   child: TextField(
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.search),
-                      hintText: 'புத்தகத்தின் பெயர் / Book name',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.search),
+                      hintText: tr('புத்தகத்தின் பெயர் / Book name'),
+                      border: const OutlineInputBorder(),
                       isDense: true,
                     ),
                     onChanged: (v) => setState(() => _query = v),

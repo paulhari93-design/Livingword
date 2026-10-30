@@ -18,7 +18,7 @@ class MessageLangController extends ValueNotifier<String> {
 
   Future<void> _load() async {
     final saved = await Prefs.instance.getString(_key);
-    if (saved == 'ta' || saved == 'en' || saved == 'both') value = saved!;
+    if (saved == 'ta' || saved == 'en') value = saved!;
   }
 
   Future<void> set(String lang) async {

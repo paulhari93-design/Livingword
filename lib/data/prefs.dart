@@ -63,6 +63,12 @@ class Prefs {
     return v is num ? v.toDouble() : null;
   }
 
+  /// All saved keys (e.g. to list every message that has highlights).
+  Future<List<String>> keys() async {
+    await _ensureLoaded();
+    return _data!.keys.toList();
+  }
+
   Future<bool?> getBool(String key) async {
     await _ensureLoaded();
     final v = _data![key];

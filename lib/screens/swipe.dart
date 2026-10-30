@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/library.dart';
 import '../models/message.dart';
+import '../l10n.dart';
 
 /// Swipe left / right to change message:
 /// finger moves to the right = next message, to the left = previous message.
@@ -47,9 +48,9 @@ Route<T> slideRoute<T>(Widget page, {required bool forward}) => PageRouteBuilder
 
 void showEndOfList(BuildContext context, bool forward) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-    content: Text(forward
+    content: Text(tr(forward
         ? 'இதுவே கடைசி செய்தி / This is the last message'
-        : 'இதுவே முதல் செய்தி / This is the first message'),
+        : 'இதுவே முதல் செய்தி / This is the first message')),
     duration: const Duration(seconds: 1),
   ));
 }

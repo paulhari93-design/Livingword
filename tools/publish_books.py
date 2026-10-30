@@ -15,6 +15,8 @@ Options:
     --remove CODE  take a book out of the app (e.g. --remove 53-0218)
 """
 import argparse
+import base64
+import gzip
 import hashlib
 import json
 import re
@@ -23,7 +25,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from docx_to_json import parse_docx  # noqa: E402
-from messagehub_to_json import parse_messagehub  # noqa: E402
+from messagehub_to_json import parse_messagehub
+from vgr_pdf_to_json import parse_vgr_pdf  # noqa: E402
+from vgr_tamil_pdf import parse_vgr_tamil_pdf  # noqa: E402
 from align import align  # noqa: E402
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -32,6 +36,11 @@ TOPIC = "new_messages"
 
 def compact(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+def zipped(text: str) -> str:
+    """The message JSON gzip-compressed and base64-encoded (about 4-6x smaller)."""
+    return base64.b64encode(gzip.compress(text.encode("utf-8"), 9)).decode("ascii")
 
 
 def version_of(text: str) -> str:
@@ -75,21 +84,44 @@ def send_notification(new_items, english=False):
 
     if english and len(new_items) == 1:
         title = "New English Message / புதிய ஆங்கில செய்தி"
+        body = f"{new_items[0]['code']}  {new_items[0]['title']}"
     elif english:
         title = f"{len(new_items)} New English Messages"
+        body = ", ".join(i["title"] for i in new_items[:3]) + ("…" if len(new_items) > 3 else "")
     elif len(new_items) == 1:
         title = "புதிய செய்தி / New Message"
         body = f"{new_items[0]['code']}  {new_items[0]['title']}"
     else:
         title = f"{len(new_items)} புதிய செய்திகள் / New Messages"
         body = ", ".join(i["title"] for i in new_items[:3]) + ("…" if len(new_items) > 3 else "")
+    # Tamil news goes to English+Tamil readers; English news also to English-only readers.
+    target = ({"condition": f"'{TOPIC}' in topics || '{TOPIC}_en' in topics"} if english
+              else {"topic": TOPIC})
     msg = messaging.Message(
-        topic=TOPIC,
+        **target,
         notification=messaging.Notification(title=title, body=body),
         data={"type": "new_message", "codes": ",".join(i["code"] for i in new_items)},
         android=messaging.AndroidConfig(priority="high"),
     )
     print("Notification sent:", messaging.send(msg))
+
+
+def sync_series(db, dry_run: bool):
+    """series.json (next to the .bat files) -> catalog/series, when it changed."""
+    path = Path(__file__).resolve().parent.parent / "series.json"
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    data = json.loads(text)  # stops here if the file has a mistake
+    version = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+    snap = db.document("catalog/series").get()
+    if snap.exists and (snap.to_dict() or {}).get("version") == version:
+        print("Series: no change.")
+        return
+    print(f"Series: {len(data)} series {'(dry run)' if dry_run else 'uploaded'}.")
+    if not dry_run:
+        db.document("catalog/series").set({"version": version,
+                                           "json": json.dumps(data, ensure_ascii=False)})
 
 
 def sync_language(db, local, catalog_path, collection, args, label):
@@ -99,13 +131,18 @@ def sync_language(db, local, catalog_path, collection, args, label):
     cloud = {i["code"]: i for i in (snap.to_dict() or {}).get("items", [])} if snap.exists else {}
 
     first_publish = not cloud
-    new, changed = [], []
+    new, changed, compress = [], [], []
     for code, b in local.items():
         if code not in cloud:
             new.append(b)
         elif args.force or cloud[code]["version"] != b["version"] or cloud[code]["title"] != b["title"]:
             changed.append(b)
+        elif not cloud[code].get("z"):
+            compress.append(b)  # already in the app, but not yet in the smaller (compressed) form
     removing = [c for c in cloud if c.upper() in {r.upper() for r in args.remove}]
+    if args.prune:
+        # Take out everything that is in the app but no longer in your folders.
+        removing = sorted(set(removing) | (set(cloud) - set(local)))
     missing = sorted(set(cloud) - set(local) - set(removing))
 
     print(f"{label}:")
@@ -116,21 +153,30 @@ def sync_language(db, local, catalog_path, collection, args, label):
     if missing:
         print("  Note: in the app but not in your folder (kept): " + ", ".join(missing)
               + "\n        To take one out: remove_book.bat")
-    if not new and not changed and not removing:
+    for code in removing:
+        print(f"  TO REMOVE  {code}  {cloud[code].get('title', '')}")
+    if compress:
+        print(f"  Making {len(compress)} messages smaller for download (no change for readers)...")
+    if not new and not changed and not removing and not compress:
         print("  Nothing new or changed.")
 
     if args.dry_run:
         return [], first_publish
 
     for b in new + changed:
+        # Full text (read by older app versions) ...
         db.document(f"{collection}/{b['code']}").set(
             {"code": b["code"], "title": b["title"], "version": b["version"], "json": b["json"]})
-        cloud[b["code"]] = {"code": b["code"], "title": b["title"], "version": b["version"]}
+    for b in new + changed + compress:
+        # ... and the compressed copy the app downloads now.
+        db.document(f"{collection}_z/{b['code']}").set({"version": b["version"], "z": zipped(b["json"])})
+        cloud[b["code"]] = {"code": b["code"], "title": b["title"], "version": b["version"], "z": True}
     for code in removing:
         del cloud[code]
         db.document(f"{collection}/{code}").delete()
+        db.document(f"{collection}_z/{code}").delete()
         print(f"  REMOVED    {code}")
-    if new or changed or removing:
+    if new or changed or removing or compress:
         items = sorted(cloud.values(), key=lambda i: i["code"])
         cat_ref.set({"items": items})
         print(f"  Uploaded. The app now has {len(items)} {label.lower()}.")
@@ -153,6 +199,8 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-notify", action="store_true")
     ap.add_argument("--remove", action="append", default=[])
+    ap.add_argument("--prune", action="store_true",
+                    help="remove from the app every message that is not in your folders")
     ap.add_argument("--force", action="store_true", help="re-upload every book (silently)")
     args = ap.parse_args()
 
@@ -177,16 +225,54 @@ def main():
                   f" Please check the file name.")
         tamil_parsed.append((code, title, paragraphs, heading, f.name))
 
-    # 1b) English: MessageHub downloads in APP_Books\English
+    # 1b) English. First choice: VGR (APP_Books\English_VGR). For any message VGR does not
+    #     have, the MessageHub copy (APP_Books\English) is used.
     english = {}
     en_paragraphs = {}
-    en_folder = folder / "English"
-    if en_folder.is_dir():
-        for f in sorted(list(en_folder.glob("*.messagehub")) + list(en_folder.glob("*.htm*"))):
-            parsed = parse_messagehub(f)
-            if parsed:
-                add_book(english, *parsed, f.name)
-                en_paragraphs[parsed[0].upper()] = parsed[2]
+    en_sources = {"VGR": 0, "MessageHub": 0}
+    for sub, source in (("English_VGR", "VGR"), ("English", "MessageHub")):
+        en_folder = folder / sub
+        if not en_folder.is_dir():
+            continue
+        for f in sorted(list(en_folder.glob("*.messagehub")) + list(en_folder.glob("*.htm*"))
+                        + list(en_folder.glob("*.pdf"))):
+            if f.suffix.lower() == ".pdf":
+                code_m = re.match(r"^(\d{2}-\d{4}[A-Za-z]?)", f.stem)
+                if code_m and code_m.group(1).upper() in en_paragraphs:
+                    continue
+                parsed = parse_vgr_pdf(f)
+            else:
+                parsed = parse_messagehub(f)
+            if not parsed or parsed[0].upper() in en_paragraphs:
+                continue
+            add_book(english, *parsed, f.name)
+            en_paragraphs[parsed[0].upper()] = parsed[2]
+            en_sources[source] += 1
+    if en_sources["VGR"]:
+        print(f"English: {en_sources['VGR']} from VGR, {en_sources['MessageHub']} from MessageHub")
+
+    # 1b2) Tamil, in this order: 1. your own Word files, 2. MessageHub (APP_Books\Tamil_MessageHub),
+    #      3. VGR (APP_Books\Tamil_VGR). A message is taken from the first place that has it.
+    have = {c.upper() for c, *_ in tamil_parsed}
+    for sub, source in (("Tamil_MessageHub", "MessageHub"), ("Tamil_VGR", "VGR")):
+        ta_folder = folder / sub
+        count = 0
+        if not ta_folder.is_dir():
+            continue
+        for f in sorted(list(ta_folder.glob("*.messagehub")) + list(ta_folder.glob("*.htm*"))
+                        + list(ta_folder.glob("*.pdf"))):
+            code_m = re.match(r"^(\d{2}-\d{4}[A-Za-z]?)", f.stem)
+            if code_m and code_m.group(1).upper() in have:
+                continue  # already taken from an earlier place in the order
+            parsed = parse_vgr_tamil_pdf(f) if f.suffix.lower() == ".pdf" else parse_messagehub(f)
+            if not parsed or parsed[0].upper() in have:
+                continue
+            code, title, paragraphs, heading = parsed
+            tamil_parsed.append((code, title, paragraphs, heading, f.name))
+            have.add(code.upper())
+            count += 1
+        if count:
+            print(f"Tamil: using {count} from {source} (for messages not found earlier in the order)")
 
     # 1c) Match Tamil paragraphs to English paragraphs (for the language switch)
     for code, title, paragraphs, heading, name in tamil_parsed:
@@ -194,11 +280,12 @@ def main():
         extra = {"align": align(paragraphs, en)} if en else None
         add_book(tamil, code, title, paragraphs, heading, name, extra)
     print(f"Found {len(tamil)} Tamil books in {folder}")
-    print(f"Found {len(english)} English books in {en_folder}")
+    print(f"Found {len(english)} English books")
 
     db = connect(Path(args.key))
 
     # 2) Compare with Firebase and upload what is new or corrected
+    sync_series(db, args.dry_run)
     new_ta, first_ta = sync_language(db, tamil, "catalog/messages", "messages", args, "Messages")
     new_en, first_en = sync_language(db, english, "catalog/messages_en", "messages_en", args,
                                      "English messages")
@@ -214,11 +301,15 @@ def main():
     #    The very first upload of a language fills an empty app, so no notification then.
     if args.no_notify:
         return
-    if new_ta and first_ta:
+    if len(new_ta) > 20:
+        print(f"{len(new_ta)} new messages at once: no notification sent.")
+    elif new_ta and first_ta:
         print("First upload: no notification sent (the app was empty).")
     elif new_ta:
         send_notification(new_ta)
-    if new_en and first_en:
+    if len(new_en) > 20:
+        print(f"{len(new_en)} new English messages at once: no notification sent.")
+    elif new_en and first_en:
         print("First English upload: no notification sent.")
     elif new_en:
         send_notification(new_en, english=True)

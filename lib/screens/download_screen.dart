@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../data/cloud.dart';
 import '../data/library.dart';
+import '../data/profile.dart';
 import '../data/local_files.dart';
 import 'main_menu_screen.dart';
+import '../l10n.dart';
 
 /// Asks the user to download the Messages and/or the Bible to the phone.
 ///
@@ -40,7 +42,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
     });
     try {
       if (_messages) {
-        setState(() => _status = 'செய்திகள் பதிவிறக்கம்… / Downloading messages…');
+        setState(() => _status = tr('செய்திகள் பதிவிறக்கம்… / Downloading messages…'));
         await Cloud.instance.syncMessages(
           onProgress: (d, t) => setState(() => _progress = t == 0 ? null : d / t),
         );
@@ -52,7 +54,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
       }
       if (_bible) {
         setState(() {
-          _status = 'வேதாகமம் பதிவிறக்கம்… / Downloading Bible…';
+          _status = tr('வேதாகமம் பதிவிறக்கம்… / Downloading Bible…');
           _progress = null;
         });
         await Cloud.instance.downloadBible(
@@ -68,8 +70,8 @@ class _DownloadScreenState extends State<DownloadScreen> {
     } catch (e) {
       setState(() {
         _busy = false;
-        _error = 'பதிவிறக்கம் தோல்வி. இணைய இணைப்பைச் சரிபார்த்து மீண்டும் முயலவும்.\n'
-            'Download failed. Check your internet connection and try again.\n($e)';
+        _error = tr('பதிவிறக்கம் தோல்வி. இணைய இணைப்பைச் சரிபார்த்து மீண்டும் முயலவும்.\n'
+            'Download failed. Check your internet connection and try again.\n($e)');
       });
     }
   }
@@ -95,13 +97,13 @@ class _DownloadScreenState extends State<DownloadScreen> {
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !widget.firstRun,
-        title: const Text('பதிவிறக்கம் / Download'),
+        title: const Tr('பதிவிறக்கம் / Download'),
       ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            Text(
+            Tr(
               'வாசிக்க, கீழே உள்ளவற்றை உங்கள் கைபேசியில் பதிவிறக்கவும். '
               'பின்பு இணையம் இல்லாமலும் வாசிக்கலாம்.\n\n'
               'Download to your phone to read. After that, no internet is needed.',
@@ -112,15 +114,15 @@ class _DownloadScreenState extends State<DownloadScreen> {
               CheckboxListTile(
                 value: _messages,
                 onChanged: _busy ? null : (v) => setState(() => _messages = v ?? false),
-                title: const Text('செய்திகள் / Messages'),
-                subtitle: const Text('புதிய செய்திகள் தானாகவே வரும் / New messages arrive automatically'),
+                title: const Tr('செய்திகள் / Messages'),
+                subtitle: const Tr('புதிய செய்திகள் தானாகவே வரும் / New messages arrive automatically'),
               ),
             if (widget.offerBible)
               CheckboxListTile(
                 value: _bible,
                 onChanged: _busy ? null : (v) => setState(() => _bible = v ?? false),
-                title: const Text('பரிசுத்த வேதாகமம் / Holy Bible'),
-                subtitle: const Text('தமிழ் + English (KJV) · ~17 MB'),
+                title: const Tr('பரிசுத்த வேதாகமம் / Holy Bible'),
+                subtitle: Text(appProfile.englishOnly ? 'English (KJV) · ~5 MB' : 'தமிழ் + English (KJV) · ~17 MB'),
               ),
             const SizedBox(height: 24),
             if (_busy) ...[
@@ -136,12 +138,12 @@ class _DownloadScreenState extends State<DownloadScreen> {
             FilledButton.icon(
               onPressed: _busy || (!_messages && !_bible) ? null : _download,
               icon: const Icon(Icons.download),
-              label: const Text('பதிவிறக்கு / Download'),
+              label: const Tr('பதிவிறக்கு / Download'),
             ),
             const SizedBox(height: 8),
             TextButton(
               onPressed: _busy ? null : _later,
-              child: const Text('பின்னர் / Later'),
+              child: const Tr('பின்னர் / Later'),
             ),
           ],
         ),

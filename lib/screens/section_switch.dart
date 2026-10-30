@@ -9,6 +9,7 @@ import 'bible_reader_screen.dart';
 import 'download_screen.dart';
 import 'home_screen.dart';
 import 'reader_screen.dart';
+import '../l10n.dart';
 
 /// Small buttons in the top bar to jump between the Bible and the Messages,
 /// using the same pictures as the main menu.
@@ -34,6 +35,47 @@ Future<void> _goTo(BuildContext context, Widget screen, {required bool bible}) a
   nav.push(MaterialPageRoute(builder: (_) => screen));
   if (last != null) nav.push(MaterialPageRoute(builder: (_) => last!));
 }
+
+/// Which reader was open when the app was closed: 'message', 'bible' or '' (none).
+/// Opening the app again returns there (not after the split view).
+class ResumeTracker {
+  static int _owner = 0;
+
+  /// A reader opened: remember it. Returns a token for [closed].
+  static int opened(String what) {
+    _owner++;
+    Prefs.instance.set('resume', what);
+    return _owner;
+  }
+
+  /// The reader with [token] was closed by the user (Back): forget it,
+  /// unless another reader has opened since.
+  static void closed(int token) {
+    if (token == _owner) Prefs.instance.set('resume', '');
+  }
+
+  /// The screens to reopen at start-up (list, then reader), or null for the main menu.
+  static Future<List<Widget>?> screensToResume() async {
+    if ((await Prefs.instance.getBool('resume_split')) == true) {
+      await Prefs.instance.set('resume_split', false);
+      return null; // closed while in split view: start at the main menu
+    }
+    final what = await Prefs.instance.getString('resume');
+    try {
+      if (what == 'message') {
+        final r = await lastMessageScreen();
+        if (r != null) return [const HomeScreen(), r];
+      } else if (what == 'bible') {
+        final r = await lastBibleScreen();
+        if (r != null) return [const BibleBooksScreen(), r];
+      }
+    } catch (_) {}
+    return null;
+  }
+}
+
+Future<Widget?> lastBibleScreen() => _lastBible();
+Future<Widget?> lastMessageScreen() => _lastMessage();
 
 /// The Bible chapter read last ('book:chapter').
 Future<Widget?> _lastBible() async {
@@ -76,7 +118,7 @@ class GoToBibleButton extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Tooltip(
-        message: 'பரிசுத்த வேதாகமம் / Holy Bible',
+        message: tr('பரிசுத்த வேதாகமம் / Holy Bible'),
         child: Material(
           color: const Color(0xFF8D5524),
           borderRadius: BorderRadius.circular(8),
@@ -104,7 +146,7 @@ class GoToMessagesButton extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Tooltip(
-        message: 'உரைக்கப்பட்ட வார்த்தை / Spoken Word',
+        message: tr('உரைக்கப்பட்ட வார்த்தை / Spoken Word'),
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
           onTap: () => _goTo(context, const HomeScreen(), bible: false),

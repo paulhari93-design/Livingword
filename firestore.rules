@@ -1,0 +1,25 @@
+rules_version = '2';
+// Who may read / write what in the app's database (Firestore).
+// The tools on your PC use the service-account key and are not limited by these rules.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Messages, Bible, catalogs: everyone may read, nobody may change them from the app.
+    match /{collection}/{doc} {
+      allow read: if collection != 'feedback';
+    }
+
+    // ⋮ → Feedback: a phone may add one (max 200 letters), never read anyone's feedback.
+    match /feedback/{id} {
+      allow create: if request.resource.data.keys().hasOnly(
+                          ['text', 'name', 'contact', 'seen', 'createdAt',
+                           'app', 'android', 'profile', 'reading'])
+                    && request.resource.data.text is string
+                    && request.resource.data.text.size() > 0
+                    && request.resource.data.text.size() <= 200
+                    && request.resource.data.name.size() <= 60
+                    && request.resource.data.contact.size() <= 80
+                    && request.resource.data.seen == false;
+    }
+  }
+}

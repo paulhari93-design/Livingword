@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/bible.dart';
+import '../l10n.dart';
 
 /// [ தமிழ் | English | Both ] switch used on the book list and in the reader.
 class BibleModeSwitch extends StatelessWidget {
@@ -22,7 +23,7 @@ class BibleModeSwitch extends StatelessWidget {
               ButtonSegment(
                 value: BibleMode.both,
                 // When "Both" is chosen, ⋮ inside it picks Normal or Split view.
-                label: mode == BibleMode.both ? const _BothLabel() : const Text('Both'),
+                label: const Text('Both'),
               ),
             ],
             selected: {mode},
@@ -56,12 +57,12 @@ class _BothLabel extends StatelessWidget {
               CheckedPopupMenuItem(
                 value: false,
                 checked: !split,
-                child: const Text('சாதாரண பார்வை / Normal view'),
+                child: const Tr('சாதாரண பார்வை / Normal view'),
               ),
               CheckedPopupMenuItem(
                 value: true,
                 checked: split,
-                child: const Text('பிரிக்கப்பட்ட பார்வை / Split view'),
+                child: const Tr('பிரிக்கப்பட்ட பார்வை / Split view'),
               ),
             ],
           ),

@@ -1,7 +1,7 @@
 name: livingword
 description: Tamil e-reader for translated messages.
 publish_to: 'none'
-version: 1.0.3+4
+version: 1.0.9+10
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -17,6 +17,10 @@ dependencies:
   # Save as PDF (with highlights): pdf builds the file, flutter_file_dialog saves it.
   pdf: any
   flutter_file_dialog: any
+  # App version in 'Feedback'.
+  package_info_plus: any
+  # Share a quote as a picture.
+  share_plus: '>=11.0.0'
 
 dev_dependencies:
   flutter_test:
@@ -31,6 +35,76 @@ flutter:
     - assets/logo.png
     - assets/splash.jpg
     - assets/messages_logo.jpg
+    - assets/home_jesus.jpg
+
+  # Reading fonts (Advanced settings → Text). All from Google Fonts, free (SIL Open Font License).
+  fonts:
+    - family: NotoSerifTamil
+      fonts:
+        - asset: assets/fonts/NotoSerifTamil_400Regular.ttf
+        - asset: assets/fonts/NotoSerifTamil_700Bold.ttf
+          weight: 700
+    - family: TiroTamil
+      fonts:
+        - asset: assets/fonts/TiroTamil_400Regular.ttf
+        - asset: assets/fonts/TiroTamil_400Regular_Italic.ttf
+          style: italic
+    - family: MuktaMalar
+      fonts:
+        - asset: assets/fonts/MuktaMalar_400Regular.ttf
+        - asset: assets/fonts/MuktaMalar_700Bold.ttf
+          weight: 700
+    - family: BalooThambi2
+      fonts:
+        - asset: assets/fonts/BalooThambi2_400Regular.ttf
+        - asset: assets/fonts/BalooThambi2_700Bold.ttf
+          weight: 700
+    - family: Arima
+      fonts:
+        - asset: assets/fonts/Arima_400Regular.ttf
+        - asset: assets/fonts/Arima_700Bold.ttf
+          weight: 700
+    - family: MeeraInimai
+      fonts:
+        - asset: assets/fonts/MeeraInimai_400Regular.ttf
+    - family: Kavivanar
+      fonts:
+        - asset: assets/fonts/Kavivanar_400Regular.ttf
+    - family: Lora
+      fonts:
+        - asset: assets/fonts/Lora_400Regular.ttf
+        - asset: assets/fonts/Lora_700Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Lora_400Regular_Italic.ttf
+          style: italic
+        - asset: assets/fonts/Lora_700Bold_Italic.ttf
+          weight: 700
+          style: italic
+    - family: Merriweather
+      fonts:
+        - asset: assets/fonts/Merriweather_400Regular.ttf
+        - asset: assets/fonts/Merriweather_700Bold.ttf
+          weight: 700
+    - family: EBGaramond
+      fonts:
+        - asset: assets/fonts/EBGaramond_400Regular.ttf
+        - asset: assets/fonts/EBGaramond_700Bold.ttf
+          weight: 700
+        - asset: assets/fonts/EBGaramond_400Regular_Italic.ttf
+          style: italic
+        - asset: assets/fonts/EBGaramond_700Bold_Italic.ttf
+          weight: 700
+          style: italic
+    - family: Literata
+      fonts:
+        - asset: assets/fonts/Literata_400Regular.ttf
+        - asset: assets/fonts/Literata_700Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Literata_400Regular_Italic.ttf
+          style: italic
+        - asset: assets/fonts/Literata_700Bold_Italic.ttf
+          weight: 700
+          style: italic
 
 # App icon (run: dart run flutter_launcher_icons)
 flutter_launcher_icons:

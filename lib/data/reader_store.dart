@@ -1,11 +1,25 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../models/highlight.dart';
 import 'prefs.dart';
 
 /// Saves highlights and font size on the phone, so they survive
 /// closing and reopening the app. (Phase 2 will also sync them to
 /// the user's account in Firestore.)
+/// Highlights deleted from ⋮ → Bookmarks & highlights: an open message / Bible chapter
+/// with that id shows its marks again from what is saved.
+class HighlightEvents extends ChangeNotifier {
+  HighlightEvents._();
+  static final HighlightEvents instance = HighlightEvents._();
+  String? last;
+  void changed(String id) {
+    last = id;
+    notifyListeners();
+  }
+}
+
 class ReaderStore {
   static const _fontKey = 'font_size';
   static String _hlKey(String code) => 'highlights_$code';
