@@ -5,7 +5,7 @@ import 'prefs.dart';
 /// ⋮ → Advanced settings → Page mode.
 @immutable
 class PageModeSettings {
-  const PageModeSettings({this.on = false, this.sideways = true, this.animate = false});
+  const PageModeSettings({this.on = true, this.sideways = true, this.animate = true});
 
   /// Messages are shown as pages (like Kindle) instead of scrolling.
   final bool on;
@@ -38,9 +38,9 @@ class PageModeController extends ValueNotifier<PageModeSettings> {
   Future<void> _load() async {
     try {
       value = PageModeSettings(
-        on: await Prefs.instance.getBool('page_mode') ?? false,
+        on: await Prefs.instance.getBool('page_mode') ?? true, // pages are the default
         sideways: true, // (pages always turn left / right)
-        animate: await Prefs.instance.getBool('page_mode_animate') ?? false,
+        animate: await Prefs.instance.getBool('page_mode_animate') ?? true, // the page curl is on by default
       );
     } catch (_) {}
   }
@@ -56,3 +56,8 @@ class PageModeController extends ValueNotifier<PageModeSettings> {
 }
 
 final pageMode = PageModeController();
+
+/// ⋮ → Page turning on / off. Turning it on also turns the page animation on;
+/// it can be switched off in அ / T → Layout.
+void setPageTurning(bool on) =>
+    pageMode.set(on ? pageMode.value.copyWith(on: true, animate: true) : pageMode.value.copyWith(on: false));

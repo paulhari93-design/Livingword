@@ -148,21 +148,38 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// On the right of each message: a ring with how far it is read, ✓ when read to the end.
-  Widget? _progressMark(MessageInfo m, ThemeData theme) {
+  /// How far a message is read (0..1), and whether it was read to the end.
+  (double, bool) _readState(MessageInfo m) {
     final id = m.lang == 'en' ? 'en_${m.code}' : m.code;
     final p = ReadingProgress.instance.of(id);
     final done = p >= ReadingProgress.done || (p < 0.02 && ReadingProgress.instance.timesRead(id) > 0);
-    if (done) return Icon(Icons.check_circle, color: theme.colorScheme.primary, size: 22);
-    if (p < 0.02) return null;
-    return SizedBox(
-      width: 22,
-      height: 22,
-      child: CircularProgressIndicator(
-        value: p,
-        strokeWidth: 3,
-        backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.15),
-      ),
+    return (done ? 1.0 : p, done);
+  }
+
+  /// Under each message: a thin line showing how far it is read (full when read).
+  Widget _subtitle(MessageInfo m, ThemeData theme) {
+    final (p, done) = _readState(m);
+    if (p < 0.02) return Text(m.code);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(m.code),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: LinearProgressIndicator(
+                value: p,
+                minHeight: 4,
+                borderRadius: BorderRadius.circular(2),
+                backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.15),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text('${(p * 100).round()}%', style: theme.textTheme.labelSmall),
+          ],
+        ),
+      ],
     );
   }
 
@@ -180,8 +197,11 @@ class _HomeScreenState extends State<HomeScreen> {
             return ListTile(
               leading: const Icon(Icons.menu_book_outlined),
               title: Text(m.title),
-              subtitle: Text(m.code),
-              trailing: _progressMark(m, theme),
+              subtitle: _subtitle(m, theme),
+              // ✓ when read to the end.
+              trailing: _readState(m).$2
+                  ? Icon(Icons.check_circle, color: theme.colorScheme.primary, size: 22)
+                  : null,
               onTap: () => _open(m),
             );
           },

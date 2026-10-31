@@ -104,7 +104,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
             const Text('LivingWord'),
           ],
         ),
-        actions: const [MoreMenu(homeOnly: true)],
+        actions: const [MoreMenu()],
       ),
       body: SafeArea(
         child: ListView(

@@ -115,7 +115,7 @@ class MarkBar extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8),
           child: Row(
             children: [
-              for (final c in HighlightColor.values) dot(c),
+              for (final c in HighlightColor.offered) dot(c),
               const SizedBox(width: 4),
               IconButton(tooltip: 'Bold', icon: const Icon(Icons.format_bold), onPressed: onBold),
               if (onSendToNotes != null)

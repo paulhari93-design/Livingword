@@ -1,13 +1,25 @@
 import 'package:flutter/material.dart';
 
 enum HighlightColor {
+  // Kindle's colours (measured from Kindle on a phone).
+  aqua('Aqua', Color(0xB343C1C4)),
+  pink('Pink', Color(0xB3E39396)),
+  orange('Orange', Color(0xB3E3A356)),
+  yellow('Yellow', Color(0xB3E5CD5F)),
+  green('Green', Color(0xB33AC89A)),
+  // Older colours: still shown for highlights made with them, no longer offered.
   neon('Neon', Color(0xB339FF14)),
-  skyBlue('Sky blue', Color(0xB387CEEB)),
-  yellow('Yellow', Color(0xB3FFFF00));
+  skyBlue('Sky blue', Color(0xB387CEEB));
 
   const HighlightColor(this.label, this.color);
   final String label;
   final Color color;
+
+  /// The colours offered when highlighting, in Kindle's order.
+  static const offered = [aqua, pink, orange, yellow, green];
+
+  /// The colour of the dot in the colour row (without transparency).
+  Color get dot => color.withValues(alpha: 1);
 }
 
 /// What a mark does: colour the background, make the text bold, or underline it.

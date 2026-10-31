@@ -22,20 +22,6 @@ class AdvancedSettingsScreen extends StatelessWidget {
       body: ListView(
         children: [
           ListTile(
-            leading: const Icon(Icons.text_fields),
-            title: const Tr('எழுத்து / Text'),
-            subtitle: const Tr('அளவு, எழுத்துரு, நிறம் / Size, font, colour'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => showTextSettings(context),
-          ),
-          ListTile(
-            leading: const Icon(Icons.palette_outlined),
-            title: const Tr('தீம் / Theme'),
-            subtitle: const Tr('பின்னணி நிறம் / Background colours'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => showThemePicker(context),
-          ),
-          ListTile(
             leading: const Icon(Icons.restart_alt),
             title: const Tr('இயல்புநிலைக்கு மீட்டமை / Reset to default'),
             subtitle: const Tr('தீம், எழுத்துரு, அளவு, நிறம் / Theme, fonts, size, colour'),
@@ -64,20 +50,6 @@ class AdvancedSettingsScreen extends StatelessWidget {
                 );
               }
             },
-          ),
-          ValueListenableBuilder<PageModeSettings>(
-            valueListenable: pageMode,
-            builder: (context, pm, _) => ListTile(
-              leading: const Icon(Icons.auto_stories_outlined),
-              title: const Tr('பக்க முறை / Page mode'),
-              subtitle: Text(pm.on
-                  ? tr('இயக்கத்தில் — பக்கங்களாக / On — pages')
-                  : tr('அணைப்பில் — உருட்டி வாசித்தல் / Off — scrolling')),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const PageModeScreen()),
-              ),
-            ),
           ),
           ValueListenableBuilder<bool>(
             valueListenable: VolumeKeys.enabled,

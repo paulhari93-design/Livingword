@@ -36,7 +36,15 @@ class MoreMenu extends StatelessWidget {
     this.homeOnly = false,
     this.lang,
     this.bible = false,
+    this.scrolling,
+    this.onScrolling,
+    this.showMarks = true,
   });
+
+  /// Messages: true = scrolling, false = pages; null = no such option on this screen.
+  final bool? scrolling;
+  final ValueChanged<bool>? onScrolling;
+  final bool showMarks; // false when "Bookmarks & highlights" is already a button on the bar
 
   final VoidCallback? onPdf; // null = no PDF option on this screen
   final String? pdfLabel; // "தமிழ் / English"
@@ -107,6 +115,8 @@ class MoreMenu extends StatelessWidget {
             if (top != null) openAppSplit(context, top: top);
           case 'feedback':
             pushInLang(context, english ? 'en' : 'ta', const FeedbackScreen());
+          case 'scroll':
+            onScrolling?.call(!(scrolling ?? false));
           case 'advanced':
             pushInLang(context, english ? 'en' : 'ta', const AdvancedSettingsScreen());
         }
@@ -138,8 +148,28 @@ class MoreMenu extends StatelessWidget {
           item('news', dot(const Icon(Icons.notifications_outlined), unseen), 'அறிவிப்புகள் / Notifications'),
         ];
         if (homeOnly) return items;
+        if (scrolling != null) {
+          // Pages are the default; this switches to scrolling and back.
+          items.insert(
+            0,
+            // Page turning on = pages (swipe left / right); off = scrolling.
+            PopupMenuItem<String>(
+              value: 'scroll',
+              child: Row(
+                children: [
+                  const Icon(Icons.auto_stories_outlined),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text(say('பக்கம் திருப்புதல் / Page turning'))),
+                  IgnorePointer(child: Switch(value: !scrolling!, onChanged: (_) {})),
+                ],
+              ),
+            ),
+          );
+        }
         if (showNotes) items.add(item('notes', const Icon(Icons.sticky_note_2_outlined), 'எனது குறிப்புகள் / MyNotes'));
-        items.add(item('marks', const Icon(Icons.bookmarks_outlined), 'புக்மார்க் & ஹைலைட் / Bookmarks & highlights'));
+        if (showMarks) {
+          items.add(item('marks', const Icon(Icons.bookmarks_outlined), 'புக்மார்க் & ஹைலைட் / Bookmarks & highlights'));
+        }
         items.add(item('history', const Icon(Icons.history), 'வரலாறு / History'));
         if (onPdf != null) {
           items.add(item('pdf', const Icon(Icons.picture_as_pdf_outlined), pdfLabel ?? 'PDF ஆக சேமி / Save as PDF'));

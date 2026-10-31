@@ -58,7 +58,11 @@ class PageReader extends StatefulWidget {
     required this.background,
     this.onDoubleTap,
     this.pieceBuilder,
+    this.swipeEnabled = true,
   });
+
+  /// false while words are chosen (dragging their handles must not turn the page).
+  final bool swipeEnabled;
 
   final VoidCallback? onDoubleTap; // the list of pages
 
@@ -183,8 +187,9 @@ class PageReaderState extends State<PageReader> with SingleTickerProviderStateMi
     _settling = true;
     final from = _offset;
     final full = _extent <= 0 ? 1.0 : _extent;
-    _anim.duration = Duration(milliseconds: (90 + 230 * (to - from).abs() / full).round());
-    final move = Tween<double>(begin: from, end: to).chain(CurveTween(curve: Curves.easeOutCubic)).animate(_anim);
+    // Unhurried, like turning real paper: up to about 1 s for a whole page.
+    _anim.duration = Duration(milliseconds: (250 + 750 * (to - from).abs() / full).round());
+    final move = Tween<double>(begin: from, end: to).chain(CurveTween(curve: Curves.easeOutQuad)).animate(_anim);
     void step() => setState(() => _offset = move.value);
     move.addListener(step);
     try {
@@ -205,6 +210,34 @@ class PageReaderState extends State<PageReader> with SingleTickerProviderStateMi
   }
 
   int get currentParagraph => _firstParagraph(_page);
+
+  /// The first paragraph on [page] / the page where [paragraph] starts.
+  int firstParagraphOf(int page) => _firstParagraph(page);
+  int pageOfParagraph(int paragraph) => _pageOfParagraph(paragraph);
+
+  /// The last paragraph that is (at least partly) on [page].
+  int lastParagraphOf(int page) {
+    if (page < 0 || page >= _pages.length) return 0;
+    for (final p in _pages[page].reversed) {
+      final n = widget.blocks[p.block].paragraph;
+      if (n >= 0) return n;
+    }
+    return _firstParagraph(page);
+  }
+
+  /// The parts of paragraphs on the page shown now: (paragraph, start, end).
+  List<(int, int, int)> get visiblePieces => _page < _pages.length
+      ? [
+          for (final p in _pages[_page])
+            if (widget.blocks[p.block].paragraph >= 0) (widget.blocks[p.block].paragraph, p.start, p.end),
+        ]
+      : const [];
+
+  /// Straight to the page where [paragraph] starts (resuming where the reader left off).
+  void goToParagraph(int paragraph) {
+    if (_pages.isEmpty) return;
+    goTo(_pageOfParagraph(paragraph));
+  }
 
   int _firstParagraph(int page) {
     if (page < 0 || page >= _pages.length) return 0;
@@ -456,7 +489,10 @@ class PageReaderState extends State<PageReader> with SingleTickerProviderStateMi
             painter: _CurlPainter(
               image: curl,
               progress: progress,
-              angle: ((fy / size.height - 0.5) * 0.5).clamp(-0.25, 0.25),
+              // Like Kindle: the turn starts at the corner under the finger with a strong
+              // slant (up to ~30°) that straightens as the page goes over.
+              angle: ((fy / size.height - 0.5) * 1.6).clamp(-0.6, 0.6) *
+                  math.pow(1 - progress, 1.5).toDouble(),
               pivotY: fy,
               radius: math.max(14.0, w * 0.075),
               paper: widget.background,
@@ -485,7 +521,8 @@ class PageReaderState extends State<PageReader> with SingleTickerProviderStateMi
       } else {
         layers = [Transform.translate(offset: _along(_offset), child: _sheet(_page))];
       }
-      final side = widget.sideways;
+      final side = widget.sideways && widget.swipeEnabled;
+      final upDown = !widget.sideways && widget.swipeEnabled;
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
@@ -493,9 +530,9 @@ class PageReaderState extends State<PageReader> with SingleTickerProviderStateMi
         onHorizontalDragStart: side ? (d) => _dragStart(d.localPosition.dy) : null,
         onHorizontalDragUpdate: side ? (d) => _dragUpdate(d.delta.dx, d.localPosition.dy) : null,
         onHorizontalDragEnd: side ? (d) => _dragEnd(d.primaryVelocity ?? 0) : null,
-        onVerticalDragStart: side ? null : (d) => _dragStart(d.localPosition.dx),
-        onVerticalDragUpdate: side ? null : (d) => _dragUpdate(d.delta.dy, d.localPosition.dx),
-        onVerticalDragEnd: side ? null : (d) => _dragEnd(d.primaryVelocity ?? 0),
+        onVerticalDragStart: upDown ? (d) => _dragStart(d.localPosition.dx) : null,
+        onVerticalDragUpdate: upDown ? (d) => _dragUpdate(d.delta.dy, d.localPosition.dx) : null,
+        onVerticalDragEnd: upDown ? (d) => _dragEnd(d.primaryVelocity ?? 0) : null,
         child: ClipRect(child: Stack(fit: StackFit.expand, children: layers)),
       );
     });

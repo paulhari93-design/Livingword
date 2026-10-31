@@ -19,6 +19,8 @@ import '../data/prefs.dart';
 import '../data/reader_store.dart';
 import '../data/reading_mode.dart';
 import '../widgets/page_reader.dart';
+import '../widgets/reading_panel.dart';
+import 'marks_screen.dart';
 import '../models/highlight.dart';
 import '../services/pdf_export.dart';
 import '../widgets/marking.dart';
@@ -168,6 +170,8 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
     _scroll.addListener(_onScroll);
     HighlightEvents.instance.addListener(_onHighlightsDeleted);
     pageMode.addListener(_onPageModeChanged);
+    BookmarkStore.instance.addListener(_loadPageBookmarks);
+    _loadPageBookmarks();
     _pageStart = widget.initialParagraph;
     // Page mode opens full screen, like Kindle (tap to show the title bar).
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -305,23 +309,46 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
 
   void _onScroll() {
     _updateProgress();
+    // The handles and toolbar of chosen words move with the text.
+    if (_sel != null && !widget.embedded) setState(() {});
+    // Keep the place up to date (a few times a second), so it can be saved even when
+    // the message is closed straight after scrolling.
+    final now = DateTime.now();
+    if (now.difference(_lastPlaceAt).inMilliseconds > 250) {
+      _lastPlaceAt = now;
+      _lastPlace = _currentParagraph();
+    }
     _scheduleSave();
   }
+
+  DateTime _lastPlaceAt = DateTime(2000);
+  int? _lastPlace; // the paragraph at the top, as last seen while scrolling
 
   /// Remembers the place and the progress shortly after the reader stops moving.
   void _scheduleSave() {
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 800), () {
-      if (mounted && (_scroll.hasClients || _inPageMode)) {
-        _remember(_hereParagraph());
+      if (mounted) _saveNow();
+    });
+  }
+
+  /// Remembers the place and the progress now.
+  void _saveNow({bool closing = false}) {
+    try {
+      if (_scroll.hasClients || _inPageMode) {
+        // (When closing, the text may already be off the screen: use the last place seen.)
+        final here = closing && !_inPageMode ? (_lastPlace ?? _hereParagraph()) : _hereParagraph();
+        _remember(here);
         final m = widget.message;
         // Reaching the end counts once per opening (reading it again counts again).
         final finished = !_counted && _progress.value >= ReadingProgress.done;
         if (finished) _counted = true;
         ReadingProgress.instance.save(m.storageId, m.lang, m.code, _progress.value,
-            paragraph: _hereParagraph(), finishedNow: finished);
+            paragraph: here, finishedNow: finished);
       }
-    });
+    } catch (_) {
+      // (Closing: the screen may already be gone; nothing to save then.)
+    }
   }
 
   /// A highlight of this message was deleted in ⋮ → Bookmarks & highlights.
@@ -336,7 +363,11 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
     if (_immersive && !appSplitOpen.value) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
-    _saveTimer?.cancel();
+    // Leaving quickly: save the place now (the timed save would be cancelled).
+    if (_saveTimer?.isActive ?? false) {
+      _saveTimer!.cancel();
+      _saveNow(closing: true);
+    }
     VolumeKeys.detach(_onVolumeKey);
     _progress.dispose();
     final token = _resumeToken;
@@ -346,7 +377,9 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
     if (ra != null && half != null) ReadAlong.instance.detach(half, ra);
     if (widget.link != null) widget.link!.unregister(widget.message.lang);
     pageMode.removeListener(_onPageModeChanged);
+    BookmarkStore.instance.removeListener(_loadPageBookmarks);
     _thumbScroll?.dispose();
+    _flipView?.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -360,7 +393,17 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
       hls = fixed;
       await _store.saveHighlights(widget.message.storageId, hls);
     }
-    _remember(widget.initialParagraph);
+    // Opened from the list (no place given): carry on where the reader left off,
+    // unless it was read to the end (then it starts again from the beginning).
+    var start = widget.initialParagraph;
+    final searching = (widget.searchQuery ?? '').trim().isNotEmpty;
+    if (start == null && !searching) {
+      await ReadingProgress.instance.load();
+      final id = widget.message.storageId;
+      final p = ReadingProgress.instance.paragraphOf(id);
+      if (p != null && p > 0 && ReadingProgress.instance.of(id) < ReadingProgress.done) start = p;
+    }
+    _remember(start);
     final other = await Library.instance
         .find(widget.message.code, widget.message.lang == 'en' ? 'ta' : 'en');
     Message? otherMessage;
@@ -383,9 +426,13 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
     final q = widget.searchQuery;
     if (q != null && q.trim().isNotEmpty) {
       _applySearch(q, jumpTo: widget.initialParagraph);
-    } else if (widget.initialParagraph != null) {
-      _jumpToParagraph(widget.initialParagraph!);
-      if (widget.flashParagraph) {
+    } else if (start != null) {
+      _jumpToParagraph(start);
+      // Page mode: the pages may already be laid out; go to the page of that paragraph.
+      _pageStart = start;
+      _pageParagraph = start;
+      _pages.currentState?.goToParagraph(start);
+      if (widget.flashParagraph && widget.initialParagraph != null) {
         setState(() => _flash = widget.initialParagraph);
         Future.delayed(const Duration(milliseconds: 1800), () {
           if (mounted) setState(() => _flash = null);
@@ -517,6 +564,11 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
   }
 
   void _jumpToParagraph(int index) {
+    // Page mode: go to the page where that paragraph starts.
+    if (_inPageMode) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _pages.currentState?.goToParagraph(index));
+      return;
+    }
     // Wait for the layout, then scroll so the paragraph is near the top.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = _keys[index].currentContext;
@@ -582,7 +634,9 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
     final other = _other;
     if (other == null) return;
     final message = await Library.instance.message(other);
-    final here = _scroll.hasClients && _scroll.offset > 20 ? _currentParagraph() : null;
+    final here = _inPageMode
+        ? (_pageParagraph > 0 ? _pageParagraph : null)
+        : (_scroll.hasClients && _scroll.offset > 20 ? _currentParagraph() : null);
     int? target;
     if (here != null) {
       if (widget.message.lang == 'ta') {
@@ -819,7 +873,7 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Row(
               children: [
-                for (final c in HighlightColor.values) dot(c),
+                for (final c in HighlightColor.offered) dot(c),
                 const SizedBox(width: 4),
                 IconButton(
                   tooltip: 'Bold',
@@ -1073,28 +1127,37 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
       // Tap = choose the line (tap more lines to stretch the choice).
       // Long press or double tap = send to MyNotes.
       child: Builder(builder: (context) {
-        Offset? downLocal, downGlobal;
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
           // On the words: choose the line. On empty space (after a short line, etc.):
           // show / hide the title bar.
-          onTapUp: (d) => _onWords(index, d.localPosition)
-              ? _onTapText(index, _offsetAt(index, d.localPosition))
-              : _onBlankTap(),
-          onDoubleTapDown: (d) {
-            downLocal = d.localPosition;
-            downGlobal = d.globalPosition;
+          // A tap anywhere (words too) shows / hides the bars, as in page mode. Only a
+          // Bible reference opens its verse. Long press chooses the line (mark bar).
+          onTapUp: (d) {
+            if (_sel == null && _onWords(index, d.localPosition)) {
+              final o = _offsetAt(index, d.localPosition);
+              for (final r in _refs[index] ?? const <ScriptureRef>[]) {
+                if (o >= r.start && o < r.end) {
+                  showScripture(context, r, lang: widget.message.lang);
+                  return;
+                }
+              }
+              // A tap on a highlight chooses it (to delete it or change its colour).
+              if (_chooseMarkAt(index, o)) return;
+            }
+            _onBlankTap();
           },
-          onDoubleTap: () {
-            if (downLocal != null) _offerNotes(index, downLocal!, downGlobal!);
-          },
-          onLongPressStart: (d) => _offerNotes(index, d.localPosition, d.globalPosition),
+          // Long press: choose words with the magnifier, as in page mode.
+          onLongPressStart: (d) => _selectStart(d.globalPosition),
+          onLongPressMoveUpdate: (d) => _selectMove(d.globalPosition),
+          onLongPressEnd: (d) => _selectEnd(),
           child: Text.rich(
             key: key,
             TextSpan(
               style: ts.value.style(context, widget.message.lang, textColor, fontSize: _fontSize),
               children: _spansFor(index, text),
             ),
+            textAlign: ts.value.align,
           ),
         );
       }),
@@ -1225,61 +1288,13 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
 
     if (_inPageMode) return _buildPages(m, theme, textColor);
 
-    final hasLangSwitch = !(_other == null || appProfile.englishOnly);
     // The top bar lies over the text, so it can slide away without moving the text.
-    if (!_immersive) {
-      _barHeight = MediaQuery.paddingOf(context).top + kToolbarHeight + (hasLangSwitch ? 52 : 0);
-    }
-    final bar = AppBar(
-        // Tapping the title also goes back.
-        title: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => Navigator.of(context).maybePop(),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(m.title, overflow: TextOverflow.ellipsis),
-              // "65-1204 · 42% · 25 min left"
-              ValueListenableBuilder<double>(
-                valueListenable: _progress,
-                builder: (_, p, __) => Text('${m.code} · ${_progressText(p)}',
-                    style: theme.textTheme.bodySmall, overflow: TextOverflow.ellipsis),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'Search',
-            icon: const Icon(Icons.search),
-            onPressed: _openSearch,
-          ),
-          const GoToBibleButton(),
-          MoreMenu(
-            lang: widget.message.lang,
-            onPdf: _savePdf,
-            // Opens this message (at this paragraph) in the top half; main menu below.
-            splitTop: (_) {
-              final here = _hereParagraph();
-              return ReaderScreen(message: widget.message, initialParagraph: here > 0 ? here : null);
-            },
-          ),
-        ],
-        bottom: !hasLangSwitch
-            ? null
-            : PreferredSize(
-                preferredSize: const Size.fromHeight(52),
-                child: MessageLangSwitch(
-                  value: m.lang,
-                  onChanged: (_) => _switchLanguage(),
-                ),
-              ),
-      );
+    final (bar, barH) = _topBar(m, theme);
+    if (!_immersive) _barHeight = barH;
 
     return Scaffold(
-      bottomNavigationBar: _sel != null
-          ? _markBar(theme)
-          : (_query.isEmpty ? null : _searchBar(theme)),
+      // (Chosen words get the toolbar above them, as in page mode.)
+      bottomNavigationBar: _sel == null && _query.isNotEmpty ? _searchBar(theme) : null,
       body: Stack(
           children: [
             Positioned.fill(child: _body(m, textColor)),
@@ -1308,6 +1323,8 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
                 ),
               ),
             ),
+            // Chosen words (long press): handles, magnifier and the toolbar above them.
+            ..._selectionLayers(theme),
           ],
         ),
     );
@@ -1350,7 +1367,8 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
     final boldMarks = Object.hashAll(_highlights
         .where((h) => h.style == MarkStyle.bold)
         .map((h) => Object.hash(h.paragraph, h.start, h.end)));
-    final key = '${m.storageId}|$_fontSize|${textColor.toARGB32()}|${ts.value.family(m.lang)}|$boldMarks';
+    final key = '${m.storageId}|$_fontSize|${textColor.toARGB32()}|${ts.value.family(m.lang)}|'
+        '${ts.value.lineHeight}|${ts.value.justify}|$boldMarks';
     if (key == _blocksKey && _blocks != null) return _blocks!;
     final body = ts.value.style(context, m.lang, textColor, fontSize: _fontSize);
     final blocks = <PageBlock>[];
@@ -1371,7 +1389,8 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
     }
     for (var i = 0; i < m.paragraphs.length; i++) {
       final text = m.paragraphs[i];
-      blocks.add(PageBlock(text, body, paragraph: i, spans: (s, e) => _spansFor(i, text, s, e)));
+      blocks.add(PageBlock(text, body,
+          paragraph: i, align: ts.value.align, spans: (s, e) => _spansFor(i, text, s, e)));
     }
     _blocksKey = key;
     return _blocks = blocks;
@@ -1387,19 +1406,277 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
       return;
     }
     if (_pagePanelOpen || !_immersive) {
-      setState(() => _pagePanelOpen = false);
-      _setImmersive(true);
+      _closePageView();
       return;
     }
-    final st = _pages.currentState;
-    final size = st?.pageSize ?? Size.zero;
-    final w = size.height > 0 ? _thumbHeight * size.width / size.height + 12 : 80.0;
-    _thumbScroll?.dispose();
-    _thumbScroll = ScrollController(
-      initialScrollOffset: (w * _pageNo - MediaQuery.sizeOf(context).width / 2 + w / 2).clamp(0, double.infinity),
-    );
+    _openPageView();
+  }
+
+  // Kindle's page view: the page shrinks, its neighbours show beside it.
+  PageController? _flipView;
+  int _flipPage = 0;
+
+  int _flipStart = 0; // the page that was open when the page view opened
+  int? _backPage; // "Back to …": the page read before jumping to another one
+
+  void _openPageView() {
+    _flipView?.dispose();
+    _flipPage = _pageNo;
+    _flipStart = _pageNo;
+    _flipView = PageController(initialPage: _pageNo, viewportFraction: 0.68);
     setState(() => _pagePanelOpen = true);
     _setImmersive(false);
+  }
+
+  /// Back to full-screen reading, on [page] (or the page that was open).
+  void _closePageView({int? page}) {
+    if (page != null && page != _pageNo) {
+      _backPage = _pageNo; // remember where the reading was, for "Back to …"
+      _pages.currentState?.goTo(page);
+    }
+    setState(() => _pagePanelOpen = false);
+    _setImmersive(true);
+  }
+
+  static const _ribbon = Color(0xFF1E6FD9); // Kindle's blue bookmark ribbon
+
+  /// The small "Back to …" card: a picture of that page; tap to go back to it.
+  Widget _backCard(ThemeData theme, PageReaderState st, int page, Size size) {
+    final en = widget.message.lang == 'en' || appProfile.englishOnly;
+    const w = 74.0;
+    final h = size.height > 0 ? w * size.height / size.width : 120.0;
+    return GestureDetector(
+      onTap: () {
+        if (page == _flipStart && _flipPage != _flipStart) {
+          // Still choosing: show that page in the row again.
+          _flipView?.animateToPage(page, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+        } else {
+          _backPage = null;
+          _closePageView(page: page);
+        }
+      },
+      child: Container(
+        width: w,
+        decoration: BoxDecoration(
+          color: theme.scaffoldBackgroundColor,
+          border: Border.all(color: theme.colorScheme.onSurface, width: 1.5),
+          boxShadow: const [BoxShadow(color: Color(0x44000000), blurRadius: 8)],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: w,
+              height: h * 0.62,
+              child: ClipRect(
+                child: FittedBox(
+                  fit: BoxFit.cover,
+                  alignment: Alignment.topCenter,
+                  child: SizedBox(
+                    width: size.width,
+                    height: size.height,
+                    child: IgnorePointer(child: st.buildPage(page, plain: true)),
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+              child: Text(
+                en ? 'Back to ${page + 1}' : 'பக்கம் ${page + 1}-க்கு',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.labelSmall,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ---- bookmarking a page (the ribbon) ----
+
+  Set<int> _bookmarkedParas = {}; // paragraphs of this message that have a bookmark
+
+  Future<void> _loadPageBookmarks() async {
+    final m = widget.message;
+    final all = await BookmarkStore.instance.all();
+    final set = {
+      for (final b in all)
+        if (b.kind == 'message' && b.lang == m.lang && b.code == m.code) b.place,
+    };
+    if (mounted) setState(() => _bookmarkedParas = set);
+  }
+
+  bool _pageBookmarked(int page) {
+    final st = _pages.currentState;
+    if (st == null) return false;
+    return _bookmarkedParas.any((p) => st.pageOfParagraph(p) == page);
+  }
+
+  /// The ribbon / bookmark button: bookmarks this page, or takes the bookmark off.
+  Future<void> _togglePageBookmark(int page) async {
+    final st = _pages.currentState;
+    if (st == null) return;
+    final m = widget.message;
+    final on = _bookmarkedParas.where((p) => st.pageOfParagraph(p) == page).toList();
+    if (on.isNotEmpty) {
+      for (final p in on) {
+        await BookmarkStore.instance.remove('message|${m.lang}|${m.code}|$p|0');
+      }
+      return;
+    }
+    final p = st.firstParagraphOf(page);
+    final text = m.paragraphs[p];
+    final r = await BookmarkStore.instance.add(Bookmark(
+      kind: 'message',
+      lang: m.lang,
+      code: m.code,
+      place: p,
+      title: '${m.code} ${m.title} ¶${_paraNumber(p)}',
+      snippet: text.length > 140 ? '${text.substring(0, 140)}…' : text,
+      at: DateTime.now(),
+    ));
+    if (r == BookmarkResult.full && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(BookmarkStore.message(r, m.lang == 'en')),
+        duration: const Duration(seconds: 4),
+      ));
+    }
+  }
+
+  Widget _pageView(ThemeData theme, double barHeight) {
+    final st = _pages.currentState;
+    final ctrl = _flipView;
+    if (st == null || ctrl == null || _pageCount == 0) return const SizedBox.shrink();
+    final size = st.pageSize;
+    final en = widget.message.lang == 'en' || appProfile.englishOnly;
+    final count = _pageCount;
+    final label = en ? 'Page ${_flipPage + 1} of $count' : 'பக்கம் ${_flipPage + 1} / $count';
+    // Moved away in this view: back to where it opened; else the page read before a jump.
+    final int? back = _flipPage != _flipStart
+        ? _flipStart
+        : (_backPage != null && _backPage != _pageNo && _backPage! < count ? _backPage : null);
+    final dark = theme.brightness == Brightness.dark;
+    final around = Color.lerp(theme.scaffoldBackgroundColor, dark ? Colors.white : Colors.black, 0.10)!;
+    return GestureDetector(
+      // Tap beside the pages: back to the page that was open.
+      onTap: _closePageView,
+      child: Container(
+        color: around,
+        child: Column(
+          children: [
+            SizedBox(height: barHeight),
+            Expanded(
+              child: Stack(
+                children: [
+                  // Opening: the page shrinks from full size into the row of pages.
+                  Positioned.fill(
+                    child: TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: 1),
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOutCubic,
+                builder: (context, t, child) => Transform.scale(scale: 1.45 - 0.45 * t, child: child),
+                child: PageView.builder(
+                  controller: ctrl,
+                  itemCount: count,
+                  onPageChanged: (i) => setState(() => _flipPage = i),
+                  itemBuilder: (_, i) => Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
+                    child: Center(
+                      child: AspectRatio(
+                        aspectRatio: size.height > 0 ? size.width / size.height : 0.5,
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              child: GestureDetector(
+                          onTap: () => _closePageView(page: i), // open this page
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: theme.scaffoldBackgroundColor,
+                              borderRadius: BorderRadius.circular(6),
+                              border: i == _pageNo
+                                  ? Border.all(color: theme.colorScheme.primary, width: 2)
+                                  : null,
+                              boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 10)],
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: FittedBox(
+                                fit: BoxFit.contain,
+                                child: SizedBox(
+                                  width: size.width,
+                                  height: size.height,
+                                  child: IgnorePointer(child: st.buildPage(i, plain: true)),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                            ),
+                            // The bookmark ribbon (like Kindle): tap to bookmark this page.
+                            Positioned(
+                              top: 0,
+                              right: 8,
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () => _togglePageBookmark(i),
+                                child: Padding(
+                                  padding: const EdgeInsets.fromLTRB(10, 0, 4, 10),
+                                  child: Icon(
+                                    _pageBookmarked(i) ? Icons.bookmark : Icons.bookmark_border,
+                                    size: 30,
+                                    color: _pageBookmarked(i) ? _ribbon : theme.colorScheme.outline,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+                  ),
+                  // "Back to …": the page you came from (like Kindle).
+                  if (back != null)
+                    Positioned(left: 12, bottom: 10, child: _backCard(theme, st, back, size)),
+                ],
+              ),
+            ),
+            Material(
+              color: theme.scaffoldBackgroundColor,
+              elevation: 6,
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
+                  child: Row(
+                    children: [
+                      Text(label, style: theme.textTheme.bodySmall),
+                      Expanded(
+                        child: count < 2
+                            ? const SizedBox(height: 48)
+                            : Slider(
+                                value: _flipPage.toDouble().clamp(0, count - 1),
+                                min: 0,
+                                max: (count - 1).toDouble(),
+                                onChanged: (v) {
+                                  setState(() => _flipPage = v.round());
+                                  ctrl.jumpToPage(v.round());
+                                },
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// Part of a paragraph on a page: tap the words to choose lines (then highlight, bold,
@@ -1429,24 +1706,362 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
+      // One tap anywhere (words too) shows the bars and the page view, like Kindle.
+      // Only a tap on a Bible reference opens the verse; words are chosen by long press.
       onTapUp: (d) {
         final o = offsetAt(d.localPosition, onWordsOnly: true);
-        if (o == null) {
-          _onPageTap();
-        } else {
-          if (_pagePanelOpen) setState(() => _pagePanelOpen = false);
-          _onTapText(i, o);
+        if (o != null && _sel == null) {
+          for (final r in _refs[i] ?? const <ScriptureRef>[]) {
+            if (o >= r.start && o < r.end) {
+              showScripture(context, r, lang: widget.message.lang);
+              return;
+            }
+          }
+          // A tap on a highlight chooses it (to delete it or change its colour).
+          if (_chooseMarkAt(i, o)) return;
         }
+        _onPageTap();
       },
-      onLongPressStart: (d) {
-        final o = offsetAt(d.localPosition);
-        if (o != null) _offerNotesAt(i, o, d.globalPosition);
-      },
+      // Long press: choose words with the magnifier (drag to choose more).
+      onLongPressStart: (d) => _selectStart(d.globalPosition),
+      onLongPressMoveUpdate: (d) => _selectMove(d.globalPosition),
+      onLongPressEnd: (d) => _selectEnd(),
       child: Builder(builder: (c) {
         textContext = c;
+        _pieceCtx['$i:$start:$end'] = c;
         return pageText(c, b.span(start, end), b.align);
       }),
     );
+  }
+
+  // ---------------- page mode: choosing words (like Kindle) ----------------
+
+  /// Where each part of a paragraph is drawn ("paragraph:start:end" → its context).
+  final Map<String, BuildContext> _pieceCtx = {};
+  Offset? _magnifierAt; // finger position while choosing (shows the magnifier)
+  (int, int, int)? _anchor; // the first word chosen: (paragraph, start, end)
+  bool _toolbarColours = false; // the toolbar shows the highlight colours
+
+  static RenderParagraph? _paragraphOf(BuildContext c) {
+    if (!c.mounted) return null;
+    RenderObject? r = c.findRenderObject();
+    while (r != null && r is! RenderParagraph) {
+      RenderObject? child;
+      r.visitChildren((x) => child ??= x);
+      r = child;
+    }
+    final p = r as RenderParagraph?;
+    return p != null && p.attached && p.hasSize ? p : null;
+  }
+
+  /// The parts of paragraphs on the page shown now, with their drawn text.
+  List<(int, int, int, RenderParagraph)> _visibleText() {
+    final out = <(int, int, int, RenderParagraph)>[];
+    if (!_inPageMode) {
+      // Scrolling: the whole paragraphs that are on the screen now.
+      final h = MediaQuery.sizeOf(context).height;
+      for (final e in _textKeys.entries) {
+        final r = e.value.currentContext?.findRenderObject();
+        if (r is! RenderParagraph || !r.attached || !r.hasSize) continue;
+        final top = r.localToGlobal(Offset.zero).dy;
+        if (top > h || top + r.size.height < 0) continue;
+        out.add((e.key, 0, widget.message.paragraphs[e.key].length, r));
+      }
+      return out;
+    }
+    for (final (p, s, e) in _pages.currentState?.visiblePieces ?? const <(int, int, int)>[]) {
+      final c = _pieceCtx['$p:$s:$e'];
+      final r = c == null ? null : _paragraphOf(c);
+      if (r != null) out.add((p, s, e, r));
+    }
+    return out;
+  }
+
+  /// The word nearest to [global] on the page: (paragraph, start, end).
+  (int, int, int)? _wordAt(Offset global) {
+    (int, int, int)? best;
+    var bestD = double.infinity;
+    for (final (p, s, e, r) in _visibleText()) {
+      final rect = r.localToGlobal(Offset.zero) & r.size;
+      if (rect.width < 3 || rect.height < 3) continue;
+      final dx = global.dx < rect.left ? rect.left - global.dx : (global.dx > rect.right ? global.dx - rect.right : 0.0);
+      final dy = global.dy < rect.top ? rect.top - global.dy : (global.dy > rect.bottom ? global.dy - rect.bottom : 0.0);
+      final d = dx + dy * 3;
+      if (d >= bestD) continue;
+      final inside = Offset(global.dx.clamp(rect.left + 1, rect.right - 1), global.dy.clamp(rect.top + 1, rect.bottom - 1));
+      final pos = r.getPositionForOffset(r.globalToLocal(inside));
+      final w = r.getWordBoundary(pos);
+      var ws = w.start, we = w.end;
+      // Not just a space: take the word next to it.
+      final text = widget.message.paragraphs[p];
+      while (we > ws && text[s + we - 1].trim().isEmpty) {
+        we--;
+      }
+      if (we <= ws) {
+        ws = pos.offset.clamp(0, e - s).toInt();
+        we = (ws + 1).clamp(0, e - s).toInt();
+      }
+      bestD = d;
+      best = (p, s + ws, s + we);
+    }
+    return best;
+  }
+
+  void _selectStart(Offset global) {
+    final w = _wordAt(global);
+    if (w == null) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _anchor = w;
+      _toolbarColours = false;
+      _magnifierAt = global;
+      _sel = (p1: w.$1, s1: w.$2, p2: w.$1, e2: w.$3);
+    });
+  }
+
+  void _selectMove(Offset global) {
+    final a = _anchor;
+    final w = _wordAt(global);
+    if (a == null || w == null) return;
+    final before = w.$1 < a.$1 || (w.$1 == a.$1 && w.$2 < a.$2);
+    setState(() {
+      _magnifierAt = global;
+      _sel = before ? (p1: w.$1, s1: w.$2, p2: a.$1, e2: a.$3) : (p1: a.$1, s1: a.$2, p2: w.$1, e2: w.$3);
+    });
+  }
+
+  void _selectEnd() => setState(() => _magnifierAt = null);
+
+  /// Tapped on a highlight (or bold / underline): choose all of it. True if there was one.
+  bool _chooseMarkAt(int p, int o) {
+    for (final h in _highlights) {
+      if (h.paragraph == p && o >= h.start && o < h.end) {
+        HapticFeedback.selectionClick();
+        setState(() {
+          _toolbarColours = false;
+          _sel = (p1: p, s1: h.start, p2: p, e2: h.end);
+        });
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Whether any of the chosen words already have a mark.
+  bool _selectionHasMarks() {
+    var found = false;
+    _forEachSelected((p, s, e) {
+      if (_highlights.any((h) => h.overlaps(p, s, e))) found = true;
+    });
+    return found;
+  }
+
+  /// Where the caret for character [offset] of paragraph [p] is on the screen:
+  /// (top of the line, line height), or null when it is not on this page.
+  (Offset, double)? _caret(int p, int offset, {bool atEnd = false}) {
+    for (final (pp, s, e, r) in _visibleText()) {
+      if (pp != p || offset < s || offset > e) continue;
+      final pos = TextPosition(offset: offset - s, affinity: atEnd ? TextAffinity.upstream : TextAffinity.downstream);
+      final local = r.getOffsetForCaret(pos, Rect.zero);
+      final h = r.getFullHeightForCaret(pos) ?? (_fontSize * 1.6);
+      return (r.localToGlobal(local), h);
+    }
+    return null;
+  }
+
+  /// Dragging a handle: the start ([isStart]) or end of the chosen words moves.
+  void _dragHandle(bool isStart, Offset global, double lineHeight) {
+    final sel = _sel;
+    if (sel == null) return;
+    // Aim at the line the handle belongs to (the finger is on the round knob).
+    final aim = global + Offset(0, isStart ? lineHeight * 0.5 + 16 : -(lineHeight * 0.5 + 16));
+    final w = _wordAt(aim);
+    if (w == null) return;
+    var (p1, s1, p2, e2) = (sel.p1, sel.s1, sel.p2, sel.e2);
+    if (isStart) {
+      (p1, s1) = (w.$1, w.$2);
+    } else {
+      (p2, e2) = (w.$1, w.$3);
+    }
+    // Keep start before end.
+    if (p1 > p2 || (p1 == p2 && s1 >= e2)) {
+      final t = (p1, s1);
+      (p1, s1) = (p2, e2 == 0 ? 0 : e2 - 1);
+      (p2, e2) = (t.$1, t.$2 + 1);
+    }
+    setState(() {
+      _magnifierAt = global;
+      _sel = (p1: p1, s1: s1, p2: p2, e2: e2);
+    });
+  }
+
+  void _copySelection() {
+    final parts = <String>[];
+    _forEachSelected((p, s, e) => parts.add(widget.message.paragraphs[p].substring(s, e)));
+    Clipboard.setData(ClipboardData(text: parts.join('\n\n')));
+    setState(() => _sel = null);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+          content: Text(widget.message.lang == 'en' ? 'Copied' : 'நகலெடுக்கப்பட்டது'),
+          duration: const Duration(seconds: 1)),
+    );
+  }
+
+  /// The handles, the magnifier and the toolbar for the chosen words (page mode).
+  List<Widget> _selectionLayers(ThemeData theme) {
+    final sel = _sel;
+    if (sel == null) {
+      _toolbarColours = false; // next time the toolbar starts with its buttons
+      return const [];
+    }
+    final out = <Widget>[];
+    final screen = MediaQuery.sizeOf(context);
+    final handleColor = theme.colorScheme.primary;
+    (Offset, double)? a, b;
+    try {
+      a = _caret(sel.p1, sel.s1);
+      b = _caret(sel.p2, sel.e2, atEnd: true);
+    } catch (_) {}
+
+    Widget handle(bool isStart, (Offset, double) at) {
+      final (pt, h) = at;
+      const knob = 16.0, pad = 14.0;
+      return Positioned(
+        left: pt.dx - knob / 2 - pad,
+        top: (isStart ? pt.dy - knob : pt.dy) - pad,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onPanUpdate: (d) => _dragHandle(isStart, d.globalPosition, h),
+          onPanEnd: (_) => _selectEnd(),
+          child: Padding(
+            padding: const EdgeInsets.all(pad),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isStart) Container(width: knob, height: knob, decoration: BoxDecoration(color: handleColor, shape: BoxShape.circle)),
+                Container(width: 2.5, height: h, color: handleColor),
+                if (!isStart) Container(width: knob, height: knob, decoration: BoxDecoration(color: handleColor, shape: BoxShape.circle)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (a != null) out.add(handle(true, a));
+    if (b != null) out.add(handle(false, b));
+
+    final mag = _magnifierAt;
+    if (mag != null) {
+      const d = 104.0;
+      out.add(Positioned(
+        left: (mag.dx - d / 2).clamp(4.0, screen.width - d - 4),
+        top: (mag.dy - d - 46).clamp(4.0, screen.height - d - 4),
+        child: const IgnorePointer(
+          child: RawMagnifier(
+            size: Size(d, d),
+            magnificationScale: 1.6,
+            focalPointOffset: Offset(0, d / 2 + 40),
+            decoration: MagnifierDecoration(
+              shape: CircleBorder(side: BorderSide(color: Color(0xFF9E9E9E), width: 1)),
+              shadows: [BoxShadow(color: Color(0x55000000), blurRadius: 10, offset: Offset(0, 3))],
+            ),
+          ),
+        ),
+      ));
+      return out; // the toolbar comes when the finger is lifted
+    }
+
+    // The toolbar: above the chosen words, or below them when there is no room.
+    final en = widget.message.lang == 'en' || appProfile.englishOnly;
+    String say(String ta, String e) => en ? e : ta;
+    const barH = 64.0;
+    final width = math.min(screen.width - 24, 420.0);
+    double top;
+    if (a != null && a.$1.dy - barH - 12 > 40) {
+      top = a.$1.dy - barH - 12;
+    } else if (b != null) {
+      top = math.min(b.$1.dy + b.$2 + 26, screen.height - barH - 24);
+    } else {
+      top = screen.height - barH - 40;
+    }
+    Widget tool(IconData icon, String label, VoidCallback onTap) => InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: Colors.white, size: 22),
+                const SizedBox(height: 3),
+                Text(label, style: const TextStyle(color: Colors.white, fontSize: 11)),
+              ],
+            ),
+          ),
+        );
+    Widget colour(HighlightColor c) => InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => _applyToSelection(MarkStyle.color, c),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 24,
+                  height: 24,
+                  decoration: BoxDecoration(color: c.dot, shape: BoxShape.circle),
+                ),
+                const SizedBox(height: 3),
+                Text(c.label, style: const TextStyle(color: Colors.white, fontSize: 11)),
+              ],
+            ),
+          ),
+        );
+    final items = _toolbarColours
+        ? <Widget>[
+            IconButton(
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: () => setState(() => _toolbarColours = false),
+            ),
+            for (final c in HighlightColor.offered) colour(c),
+          ]
+        : <Widget>[
+            // Already marked: Delete comes first (takes the highlight / bold off).
+            if (_selectionHasMarks())
+              tool(Icons.delete_outline, say('நீக்கு', 'Delete'), () {
+                _forEachSelected(_unmark);
+                setState(() => _sel = null);
+              }),
+            tool(Icons.circle, say('ஹைலைட்', 'Highlight'), () => setState(() => _toolbarColours = true)),
+            tool(Icons.format_bold, say('தடித்த', 'Bold'), () => _applyToSelection(MarkStyle.bold)),
+            tool(Icons.note_add_outlined, say('குறிப்பு', 'Note'), _sendSelectionToNotes),
+            tool(Icons.copy, say('நகல்', 'Copy'), _copySelection),
+            tool(Icons.bookmark_add_outlined, say('புக்மார்க்', 'Bookmark'), _bookmarkSelection),
+            tool(Icons.share_outlined, say('பகிர்', 'Share'), _shareSelection),
+          ];
+    out.add(Positioned(
+      left: (screen.width - width) / 2,
+      top: top,
+      width: width,
+      child: Material(
+        color: const Color(0xFF222222),
+        elevation: 8,
+        borderRadius: BorderRadius.circular(16),
+        child: SizedBox(
+          height: barH,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            children: [
+              for (final w in items) Center(child: w),
+            ],
+          ),
+        ),
+      ),
+    ));
+    return out;
   }
 
   static const double _thumbHeight = 128;
@@ -1532,40 +2147,98 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
     );
   }
 
-  Widget _buildPages(Message m, ThemeData theme, Color textColor) {
-    final settings = pageMode.value;
-    final inset = MediaQuery.viewPaddingOf(context).top;
-    if (inset > _pageTopInset) _pageTopInset = inset; // (kept, so the pages never move)
-    final barHeight = MediaQuery.paddingOf(context).top + kToolbarHeight;
-    final showBars = !_immersive;
+  /// The top bar (the same in pages and in scrolling): Search, Bible, MyNotes, அ / T
+  /// (text and layout), ⋮; under them the title, and the Tamil / English switch.
+  (AppBar, double) _topBar(Message m, ThemeData theme) {
+    const titleRow = 58.0; // room for tall Tamil letters
+    final hasLangSwitch = !(_other == null || appProfile.englishOnly);
     final en = m.lang == 'en' || appProfile.englishOnly;
+    final height =
+        MediaQuery.paddingOf(context).top + kToolbarHeight + titleRow + (hasLangSwitch ? 52 : 0);
     final bar = AppBar(
-      title: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => Navigator.of(context).maybePop(),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(m.title, overflow: TextOverflow.ellipsis),
-            ValueListenableBuilder<double>(
-              valueListenable: _progress,
-              builder: (_, p, __) => Text('${m.code} · ${_progressText(p)}',
-                  style: theme.textTheme.bodySmall, overflow: TextOverflow.ellipsis),
-            ),
-          ],
-        ),
-      ),
       actions: [
+        IconButton(
+          tooltip: en ? 'Search' : 'தேடு',
+          icon: const Icon(Icons.search),
+          onPressed: _openSearch,
+        ),
+        const GoToBibleButton(),
+        IconButton(
+          tooltip: en ? 'MyNotes' : 'எனது குறிப்புகள்',
+          icon: const Icon(Icons.sticky_note_2_outlined),
+          onPressed: () => openNotes(context),
+        ),
+        // அ (Tamil) / T (English): font, size, page colour, layout — shows at once.
+        IconButton(
+          tooltip: en ? 'Text' : 'எழுத்து',
+          icon: Text(en ? 'T' : 'அ', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+          onPressed: () => showReadingPanel(context, lang: m.lang),
+        ),
         MoreMenu(
           lang: m.lang,
           onPdf: _savePdf,
+          showNotes: false,
+          scrolling: !pageMode.value.on,
+          onScrolling: (on) => setPageTurning(!on),
+          // Opens this message (at this paragraph) in the top half; main menu below.
           splitTop: (_) {
             final here = _hereParagraph();
             return ReaderScreen(message: m, initialParagraph: here > 0 ? here : null);
           },
         ),
       ],
+      bottom: PreferredSize(
+        preferredSize: Size.fromHeight(titleRow + (hasLangSwitch ? 52 : 0)),
+        child: Column(
+          children: [
+            SizedBox(
+              height: titleRow,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                // (Shrinks rather than overflowing if a font is taller still.)
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.bottomLeft,
+                  child: SizedBox(
+                    width: MediaQuery.sizeOf(context).width - 32,
+                    child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(m.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                    ValueListenableBuilder<double>(
+                      valueListenable: _progress,
+                      builder: (_, p, __) => Text('${m.code} · ${_progressText(p)}',
+                          style: theme.textTheme.bodySmall, overflow: TextOverflow.ellipsis),
+                    ),
+                  ],
+                ),
+                  ),
+                ),
+              ),
+            ),
+            if (hasLangSwitch)
+              SizedBox(
+                height: 52,
+                child: MessageLangSwitch(value: m.lang, onChanged: (_) => _switchLanguage()),
+              ),
+          ],
+        ),
+      ),
     );
+    return (bar, height);
+  }
+
+  Widget _buildPages(Message m, ThemeData theme, Color textColor) {
+    final settings = pageMode.value;
+    final inset = MediaQuery.viewPaddingOf(context).top;
+    if (inset > _pageTopInset) _pageTopInset = inset; // (kept, so the pages never move)
+    final (bar, barHeight) = _topBar(m, theme);
+    final showBars = !_immersive;
+    final en = m.lang == 'en' || appProfile.englishOnly;
     return Scaffold(
       body: Stack(
         children: [
@@ -1579,6 +2252,7 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
               animate: settings.animate,
               onTap: _onPageTap,
               pieceBuilder: _pagePiece,
+              swipeEnabled: _sel == null,
               background: theme.scaffoldBackgroundColor,
               onPage: (page, count, paragraph, fraction) {
                 _pageParagraph = paragraph;
@@ -1586,6 +2260,7 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
                 _scheduleSave();
                 if (mounted && (page != _pageNo || count != _pageCount)) {
                   setState(() {
+                    if (page != _pageNo) _sel = null; // turning the page lets go of the chosen words
                     _pageNo = page;
                     _pageCount = count;
                   });
@@ -1593,6 +2268,13 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
               },
             ),
           ),
+          // A bookmarked page shows the ribbon in its corner.
+          if (!_pagePanelOpen && _pageCount > 0 && _pageBookmarked(_pageNo))
+            const Positioned(
+              top: 0,
+              right: 18,
+              child: IgnorePointer(child: Icon(Icons.bookmark, size: 32, color: _ribbon)),
+            ),
           // Page number at the bottom (like Kindle).
           if (!showBars && _pageCount > 0)
             Positioned(
@@ -1607,6 +2289,8 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
                 ),
               ),
             ),
+          // Tap: the page shrinks into the row of pages (like Kindle).
+          if (showBars && _pagePanelOpen) Positioned.fill(child: _pageView(theme, barHeight)),
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             curve: Curves.easeOut,
@@ -1616,11 +2300,11 @@ class _ReaderScreenState extends State<ReaderScreen> with SingleTickerProviderSt
             height: barHeight,
             child: bar,
           ),
-          // Chosen lines: highlight, bold, underline, notes, bookmark, share (as in scrolling).
-          if (_sel != null)
-            Positioned(left: 0, right: 0, bottom: 0, child: _markBar(theme))
-          else if (showBars && _pagePanelOpen)
-            Positioned(left: 0, right: 0, bottom: 0, child: _pagePanel(theme)),
+          // Chosen words: the toolbar above them, the handles and the magnifier.
+          ..._selectionLayers(theme),
+          // Searching: matches are orange; up / down go to the next page with a match.
+          if (_query.isNotEmpty && _sel == null && !_pagePanelOpen)
+            Positioned(left: 0, right: 0, bottom: 0, child: _searchBar(theme)),
         ],
       ),
     );

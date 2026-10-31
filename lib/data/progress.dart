@@ -65,6 +65,9 @@ class ReadingProgress extends ChangeNotifier {
   double of(String storageId) => _history[storageId]?.progress ?? 0;
   int timesRead(String storageId) => _history[storageId]?.timesRead ?? 0;
 
+  /// Where the reader left off in this message (paragraph), or null.
+  int? paragraphOf(String storageId) => _history[storageId]?.paragraph;
+
   /// Newest first.
   List<HistoryEntry> entries() =>
       _history.values.toList()..sort((a, b) => b.lastOpened.compareTo(a.lastOpened));

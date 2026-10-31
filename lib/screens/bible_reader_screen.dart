@@ -5,6 +5,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import '../data/bible.dart';
+import '../data/bible_progress.dart';
 import '../data/mark_mirror.dart';
 import '../data/prefs.dart';
 import '../data/reader_store.dart';
@@ -14,6 +15,7 @@ import '../theme/reading_theme.dart';
 import '../theme/text_settings.dart';
 import '../widgets/marking.dart';
 import 'bible_mode_switch.dart';
+import 'bible_books_screen.dart' show ChapterProgressLine;
 import '../data/bookmarks.dart';
 import '../services/share_quote.dart';
 import 'notes_screen.dart';
@@ -21,6 +23,9 @@ import 'read_along.dart';
 import 'section_switch.dart';
 import 'split_app_screen.dart';
 import '../data/profile.dart';
+import '../data/reading_mode.dart';
+import '../widgets/page_reader.dart';
+import '../widgets/reading_panel.dart';
 import '../widgets/more_menu.dart';
 import '../l10n.dart';
 
@@ -82,6 +87,9 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
     super.initState();
     bibleMode.addListener(_onModeChanged);
     bibleSplit.addListener(_onModeChanged);
+    pageMode.addListener(_onPageModeChanged);
+    HighlightEvents.instance.addListener(_onMarksChanged);
+    _loadAllMarks();
     // Reopen here next time the app starts (not inside the split view).
     if (!appSplitOpen.value) _resumeToken = ResumeTracker.opened('bible');
     _loadTexts();
@@ -131,6 +139,8 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
     final ra = _readAlong, half = _half;
     if (ra != null && half != null) ReadAlong.instance.detach(half, ra);
     bibleMode.removeListener(_onModeChanged);
+    pageMode.removeListener(_onPageModeChanged);
+    HighlightEvents.instance.removeListener(_onMarksChanged);
     _ts?.removeListener(_textChanged);
     bibleSplit.removeListener(_onModeChanged);
     _pages.dispose();
@@ -165,6 +175,10 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
 
   void _goTo(int chapter) {
     if (chapter < 1 || chapter > widget.book.chapterCount) return;
+    if (_inPages) {
+      _reader.currentState?.goToParagraph(chapter * 1000);
+      return;
+    }
     _pages.animateToPage(chapter - 1, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
   }
 
@@ -228,25 +242,233 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
         gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
             maxCrossAxisExtent: 64, mainAxisSpacing: 8, crossAxisSpacing: 8),
         itemCount: widget.book.chapterCount,
-        itemBuilder: (_, i) => OutlinedButton(
-          style: OutlinedButton.styleFrom(padding: EdgeInsets.zero),
-          onPressed: () => Navigator.of(ctx).pop(i + 1),
-          child: Text('${i + 1}'),
+        itemBuilder: (_, i) => Stack(
+          children: [
+            Positioned.fill(
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(padding: EdgeInsets.zero),
+                onPressed: () => Navigator.of(ctx).pop(i + 1),
+                child: Text('${i + 1}'),
+              ),
+            ),
+            // How far this chapter is read.
+            Positioned(
+              left: 8,
+              right: 8,
+              bottom: 6,
+              child: IgnorePointer(child: ChapterProgressLine(widget.book.number, i + 1)),
+            ),
+          ],
         ),
       ),
     );
-    if (picked != null) _pages.jumpToPage(picked - 1);
+    if (picked != null) {
+      if (_inPages) {
+        _reader.currentState?.goToParagraph(picked * 1000);
+      } else {
+        _pages.jumpToPage(picked - 1);
+      }
+    }
   }
 
-  @override
-  Widget build(BuildContext context) {
+  // ---------------- page mode (the default, like the Messages) ----------------
+
+  /// Pages instead of scrolling: the whole book is laid out on pages, chapter after
+  /// chapter; swipe left / right to turn. Not in the split view.
+  bool get _inPages => pageMode.value.on && _half == null && !appSplitOpen.value;
+
+  final _reader = GlobalKey<PageReaderState>();
+  bool _bars = true; // the top bar and chapter buttons are shown (tap to hide / show)
+  double _topInset = 0;
+  final Map<int, List<Highlight>> _taMarksAll = {}, _enMarksAll = {};
+  int _marksVersion = 0;
+  List<PageBlock>? _blocks;
+  String? _blocksKey;
+
+  void _onPageModeChanged() {
+    if (!mounted) return;
+    setState(() {});
+    if (_inPages) {
+      _loadAllMarks(); // marks may have changed while scrolling
+    } else {
+      // Back to scrolling: show the chapter that was being read.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_pages.hasClients) _pages.jumpToPage(_chapter - 1);
+      });
+    }
+  }
+
+  void _onMarksChanged() {
+    final id = HighlightEvents.instance.last ?? '';
+    if (id.startsWith('bible_') && id.contains('_${widget.book.number}_')) _loadAllMarks();
+  }
+
+  /// Every chapter's marks (shown on the pages).
+  Future<void> _loadAllMarks() async {
+    final b = widget.book.number;
+    for (var c = 1; c <= widget.book.chapterCount; c++) {
+      _taMarksAll[c] = await _store.loadHighlights('bible_ta_${b}_$c');
+      _enMarksAll[c] = await _store.loadHighlights('bible_en_${b}_$c');
+    }
+    if (mounted) setState(() => _marksVersion++);
+  }
+
+  /// Flat text runs (each with its whole style) for one verse, so any part of it can
+  /// be cut out for a page.
+  List<TextSpan> _verseRuns(int c, int v, TextStyle base, Color numberColor) {
+    final t = ts.value;
+    final showTa = _mode != BibleMode.english && _tamil != null && v < (_tamil![c - 1].length);
+    final showEn = _mode != BibleMode.tamil && v < _english![c - 1].length;
+    final both = showTa && showEn;
+    final runs = <TextSpan>[
+      TextSpan(
+          text: '${v + 1}  ',
+          style: base.copyWith(fontSize: _fontSize * 0.75, fontWeight: FontWeight.bold, color: numberColor)),
+    ];
+    void add(String text, List<Highlight> marks, TextStyle style) {
+      for (final r in markedSpans(text, marks.where((h) => h.paragraph == v), chosen: null, chosenColor: Colors.transparent)) {
+        runs.add(TextSpan(text: r.text, style: r.style == null ? style : style.merge(r.style)));
+      }
+    }
+
+    if (showTa) {
+      add(_tamil![c - 1][v], _taMarksAll[c] ?? const [],
+          base.copyWith(fontFamily: t.family('ta'), fontFamilyFallback: t.fallback('ta'), fontStyle: t.fontStyle('ta')));
+    }
+    if (both) runs.add(TextSpan(text: '\n', style: base));
+    if (showEn) {
+      add(
+          _english![c - 1][v],
+          _enMarksAll[c] ?? const [],
+          base.copyWith(
+            fontFamily: t.family('en'),
+            fontFamilyFallback: t.fallback('en'),
+            fontStyle: both ? FontStyle.italic : t.fontStyle('en'),
+            fontSize: both ? _fontSize * 0.9 : null,
+            color: both ? base.color?.withValues(alpha: 0.75) : null,
+          ));
+    }
+    return runs;
+  }
+
+  /// The part [s]..[e] of a verse's runs.
+  static List<InlineSpan> _cut(List<TextSpan> runs, int s, int e) {
+    final out = <InlineSpan>[];
+    var at = 0;
+    for (final r in runs) {
+      final text = r.text ?? '';
+      final a = math.max(s, at), b = math.min(e, at + text.length);
+      if (a < b) out.add(TextSpan(text: text.substring(a - at, b - at), style: r.style));
+      at += text.length;
+    }
+    return out;
+  }
+
+  /// The book as blocks for the pages: each chapter's heading, then its verses
+  /// (paragraph number = chapter × 1000 + verse).
+  List<PageBlock> _pageBlocks(TextStyle base, Color numberColor) {
+    final t = ts.value;
+    final key = '${_mode.name}|$_fontSize|${base.color?.toARGB32()}|${t.tamilFont}|${t.englishFont}|'
+        '${t.lineHeight}|${t.justify}|$_marksVersion';
+    if (key == _blocksKey && _blocks != null) return _blocks!;
+    final blocks = <PageBlock>[];
+    final total = widget.book.chapterCount;
+    final both = _mode == BibleMode.both && _tamil != null;
+    for (var c = 1; c <= total; c++) {
+      if (c - 1 >= _english!.length) break;
+      blocks.add(PageBlock(
+        '$_bookName $c',
+        base.copyWith(fontSize: _fontSize + 3, fontWeight: FontWeight.w700),
+        align: TextAlign.center,
+        spaceAfter: 14,
+      ));
+      final count = math.max(_mode != BibleMode.english && _tamil != null ? _tamil![c - 1].length : 0,
+          _mode != BibleMode.tamil ? _english![c - 1].length : 0);
+      for (var v = 0; v < count; v++) {
+        final runs = _verseRuns(c, v, base, numberColor);
+        final text = runs.map((r) => r.text ?? '').join();
+        blocks.add(PageBlock(text, base,
+            align: t.align,
+            spaceAfter: both ? 18 : 12,
+            paragraph: c * 1000 + v,
+            spans: (s, e) => _cut(runs, s, e)));
+      }
+    }
+    _blocksKey = key;
+    return _blocks = blocks;
+  }
+
+  void _onPagesMoved(int page, int count, int paragraph, double fraction) {
+    final c = paragraph ~/ 1000;
+    if (c >= 1 && c != _chapter) {
+      setState(() => _chapter = c);
+      _remember();
+    }
+    // Progress lines: how far into this chapter the page reaches.
+    final st = _reader.currentState;
+    if (st != null) {
+      final last = st.lastParagraphOf(page);
+      final lc = last ~/ 1000, lv = last % 1000;
+      final verses = lc >= 1 && lc - 1 < _english!.length ? _english![lc - 1].length : 0;
+      if (verses > 0) BibleProgress.instance.update(widget.book.number, lc, (lv + 1) / verses);
+      for (var k = c; k < lc; k++) {
+        if (k >= 1) BibleProgress.instance.update(widget.book.number, k, 1);
+      }
+    }
+  }
+
+  Widget _buildPages(BuildContext context, AppBar bar, Widget? chapterButtons) {
     final theme = Theme.of(context);
     final textColor = ts.value.textColor(context, theme.colorScheme.onSurface);
-    final numberColor = theme.colorScheme.primary;
-    final total = widget.book.chapterCount;
-
+    final base = ts.value.style(context, _mode == BibleMode.english ? 'en' : 'ta', textColor, fontSize: _fontSize);
+    final inset = MediaQuery.viewPaddingOf(context).top;
+    if (inset > _topInset) _topInset = inset; // (kept, so the pages never move)
+    final barH = MediaQuery.paddingOf(context).top +
+        kToolbarHeight +
+        (appProfile.englishOnly ? 0 : 52);
+    final start = widget.initialVerse != null && widget.initialVerse! > 0
+        ? _chapter * 1000 + widget.initialVerse! - 1
+        : _chapter * 1000;
     return Scaffold(
-      appBar: AppBar(
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: PageReader(
+              key: _reader,
+              blocks: _pageBlocks(base, theme.colorScheme.primary),
+              padding: EdgeInsets.fromLTRB(22, _topInset + 20, 22, 36),
+              initialParagraph: start,
+              sideways: true,
+              animate: pageMode.value.animate,
+              background: theme.scaffoldBackgroundColor,
+              onTap: () => setState(() => _bars = !_bars),
+              onPage: _onPagesMoved,
+            ),
+          ),
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            left: 0,
+            right: 0,
+            top: _bars ? 0 : -barH - 4,
+            height: barH,
+            child: bar,
+          ),
+          if (_bars && chapterButtons != null)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Material(color: theme.scaffoldBackgroundColor, elevation: 6, child: chapterButtons),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// The top bar: book and chapter (tap to pick a chapter), Messages, ⋮, Tamil / English.
+  AppBar _bar(int total) {
+    return AppBar(
         title: InkWell(
           onTap: total > 1 ? _pickChapter : null,
           child: Row(
@@ -258,10 +480,19 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
           ),
         ),
         actions: [
+          // அ (Tamil) / T (English): font, size, page colour, layout — shows at once.
+          IconButton(
+            tooltip: _mode == BibleMode.tamil ? 'எழுத்து' : 'Text',
+            icon: Text(_mode == BibleMode.tamil ? 'அ' : 'T',
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+            onPressed: () => showReadingPanel(context, lang: _mode == BibleMode.tamil ? 'ta' : 'en'),
+          ),
           const GoToMessagesButton(),
           MoreMenu(
             bible: true, // Tamil tab → Tamil menu; English or Both → English
             onPdf: _savePdf,
+            scrolling: _half == null && !appSplitOpen.value ? !pageMode.value.on : null,
+            onScrolling: (on) => setPageTurning(!on),
             // Opens this chapter in the top half; main menu below.
             splitTop: (_) => BibleReaderScreen(book: widget.book, initialChapter: _chapter),
           ),
@@ -272,7 +503,52 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
                 preferredSize: Size.fromHeight(52),
                 child: BibleModeSwitch(),
               ),
-      ),
+      );
+  }
+
+  /// Previous / next chapter at the bottom.
+  Widget? _chapterButtons(ThemeData theme, int total) {
+    return total <= 1
+          ? null
+          : SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: _chapter > 1 ? () => _goTo(_chapter - 1) : null,
+                      icon: const Icon(Icons.chevron_left),
+                      label: Text(_mode == BibleMode.english ? 'Previous' : 'முந்தைய'),
+                    ),
+                    const Spacer(),
+                    Text('$_chapter / $total', style: theme.textTheme.bodyMedium),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: _chapter < total ? () => _goTo(_chapter + 1) : null,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(_mode == BibleMode.english ? 'Next' : 'அடுத்து'),
+                          const Icon(Icons.chevron_right),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final textColor = ts.value.textColor(context, theme.colorScheme.onSurface);
+    final numberColor = theme.colorScheme.primary;
+    final total = widget.book.chapterCount;
+    if (_inPages && _ready) return _buildPages(context, _bar(total), _chapterButtons(theme, total));
+
+    return Scaffold(
+      appBar: _bar(total),
       body: !_ready
           ? const Center(child: CircularProgressIndicator())
           : PageView.builder(
@@ -305,35 +581,7 @@ class _BibleReaderScreenState extends State<BibleReaderScreen> {
                     : (v, f) => ReadAlong.instance.moved(_half!, (i + 1) * 1000 + v, f),
               ),
             ),
-      bottomNavigationBar: total <= 1
-          ? null
-          : SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                child: Row(
-                  children: [
-                    TextButton.icon(
-                      onPressed: _chapter > 1 ? () => _goTo(_chapter - 1) : null,
-                      icon: const Icon(Icons.chevron_left),
-                      label: Text(_mode == BibleMode.english ? 'Previous' : 'முந்தைய'),
-                    ),
-                    const Spacer(),
-                    Text('$_chapter / $total', style: theme.textTheme.bodyMedium),
-                    const Spacer(),
-                    TextButton(
-                      onPressed: _chapter < total ? () => _goTo(_chapter + 1) : null,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(_mode == BibleMode.english ? 'Next' : 'அடுத்து'),
-                          const Icon(Icons.chevron_right),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+      bottomNavigationBar: _chapterButtons(Theme.of(context), total),
     );
   }
 }
@@ -396,6 +644,26 @@ class _ChapterPageState extends State<_ChapterPage> {
     super.initState();
     _loadMarks();
     HighlightEvents.instance.addListener(_onHighlightsDeleted);
+    for (final c in [_scroll, _scrollTa, _scrollEn]) {
+      c.addListener(_trackProgress);
+    }
+  }
+
+  /// How far down the chapter the reader has seen (the bottom of the screen), for the
+  /// progress lines in the book list and chapter grid. A chapter that fits on one
+  /// screen counts as read when it is shown.
+  void _trackProgress() {
+    if (!mounted) return;
+    var best = 0.0;
+    for (final c in [_scroll, _scrollTa, _scrollEn]) {
+      if (!c.hasClients) continue;
+      final pos = c.position;
+      final total = pos.maxScrollExtent + pos.viewportDimension;
+      if (total <= 0) continue;
+      final f = pos.maxScrollExtent <= 0 ? 1.0 : (pos.pixels + pos.viewportDimension) / total;
+      if (f > best) best = f;
+    }
+    if (best > 0) BibleProgress.instance.update(widget.book, widget.chapter, best);
   }
 
   void _onHighlightsDeleted() {
@@ -863,6 +1131,8 @@ class _ChapterPageState extends State<_ChapterPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Count what is on the screen as soon as the chapter is shown.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _trackProgress());
     final count = math.max(
       widget.showTamil ? widget.tamil.length : 0,
       widget.showEnglish ? widget.english.length : 0,

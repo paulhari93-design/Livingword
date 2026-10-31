@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/bible.dart';
+import '../data/bible_progress.dart';
 import '../theme/reading_theme.dart';
 import 'bible_mode_switch.dart';
 import 'bible_reader_screen.dart';
@@ -24,6 +25,7 @@ class _BibleBooksScreenState extends State<BibleBooksScreen> {
   @override
   void initState() {
     super.initState();
+    BibleProgress.instance.load();
     Bible.instance.books().then((b) {
       if (mounted) setState(() => _books = b);
     });
@@ -56,25 +58,56 @@ class _BibleBooksScreenState extends State<BibleBooksScreen> {
     if (_books.isEmpty) return const Center(child: CircularProgressIndicator());
     if (items.isEmpty) return Center(child: Text(english ? 'No book found' : 'புத்தகம் கிடைக்கவில்லை'));
     final theme = Theme.of(context);
-    return ListView.separated(
+    return ListenableBuilder(
+      listenable: BibleProgress.instance,
+      builder: (context, _) => ListView.separated(
       itemCount: items.length,
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (_, i) {
         final b = items[i];
+        final read = BibleProgress.instance.chaptersRead(b.number);
+        final label = Text(switch (mode) {
+          BibleMode.tamil => '${b.chapterCount} அதிகாரங்கள்',
+          BibleMode.english => '${b.chapterCount} chapters',
+          BibleMode.both => '${b.english} · ${b.chapterCount} அதிகாரங்கள் / chapters',
+        });
         return ListTile(
           leading: CircleAvatar(
             backgroundColor: theme.colorScheme.primaryContainer,
             child: Text('${b.number}', style: TextStyle(color: theme.colorScheme.onPrimaryContainer)),
           ),
           title: Text(english ? b.english : b.tamil, style: const TextStyle(fontSize: 18)),
-          subtitle: Text(switch (mode) {
-            BibleMode.tamil => '${b.chapterCount} அதிகாரங்கள்',
-            BibleMode.english => '${b.chapterCount} chapters',
-            BibleMode.both => '${b.english} · ${b.chapterCount} அதிகாரங்கள் / chapters',
-          }),
+          // Under each book: a line with how many of its chapters are read.
+          subtitle: read == 0
+              ? label
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    label,
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: LinearProgressIndicator(
+                            value: read / b.chapterCount,
+                            minHeight: 4,
+                            borderRadius: BorderRadius.circular(2),
+                            backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.15),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text('$read/${b.chapterCount}', style: theme.textTheme.labelSmall),
+                      ],
+                    ),
+                  ],
+                ),
+          trailing: read >= b.chapterCount
+              ? Icon(Icons.check_circle, color: theme.colorScheme.primary, size: 22)
+              : null,
           onTap: () => _openBook(b),
         );
       },
+    ),
     );
   }
 
@@ -153,16 +186,47 @@ class _ChapterGridScreen extends StatelessWidget {
         itemBuilder: (_, i) => Material(
           color: theme.colorScheme.secondaryContainer,
           borderRadius: BorderRadius.circular(12),
+          clipBehavior: Clip.antiAlias,
           child: InkWell(
-            borderRadius: BorderRadius.circular(12),
             onTap: () => onPick(i + 1),
-            child: Center(
-              child: Text('${i + 1}',
-                  style: TextStyle(fontSize: 18, color: theme.colorScheme.onSecondaryContainer)),
+            child: Stack(
+              children: [
+                Center(
+                  child: Text('${i + 1}',
+                      style: TextStyle(fontSize: 18, color: theme.colorScheme.onSecondaryContainer)),
+                ),
+                // How far this chapter is read.
+                Positioned(left: 8, right: 8, bottom: 7, child: ChapterProgressLine(book.number, i + 1)),
+              ],
             ),
           ),
         ),
       ),
     );
   }
+}
+
+/// A thin line at the bottom of a chapter button: how far that chapter is read.
+class ChapterProgressLine extends StatelessWidget {
+  const ChapterProgressLine(this.book, this.chapter, {super.key});
+  final int book;
+  final int chapter;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: BibleProgress.instance,
+        builder: (context, _) {
+          final f = BibleProgress.instance.chapter(book, chapter);
+          if (f < 0.02) return const SizedBox.shrink();
+          final theme = Theme.of(context);
+          final read = f >= BibleProgress.done;
+          return LinearProgressIndicator(
+            value: read ? 1 : f,
+            minHeight: 3,
+            borderRadius: BorderRadius.circular(2),
+            color: theme.colorScheme.primary,
+            backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.15),
+          );
+        },
+      );
 }

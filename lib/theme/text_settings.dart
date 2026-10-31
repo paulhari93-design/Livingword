@@ -57,19 +57,44 @@ const textColors = [
   TextColorChoice('maroon', 'Maroon', Color(0xFF6D1A36), Color(0xFFF2B8C6)),
 ];
 
+/// Line spacing choices (Aa → Layout).
+const lineSpacings = [1.4, 1.6, 1.9];
+
 class TextSettings {
   final double size;
   final String tamilFont;
   final String englishFont;
   final String color;
-  const TextSettings({this.size = 20, this.tamilFont = 'system', this.englishFont = 'system', this.color = 'theme'});
+  final double lineHeight; // space between lines (1.6 = normal)
+  final bool justify; // straight right edge (like a book) instead of ragged
+  const TextSettings({
+    this.size = 20,
+    this.tamilFont = 'system',
+    this.englishFont = 'system',
+    this.color = 'theme',
+    this.lineHeight = 1.6,
+    this.justify = false,
+  });
 
-  TextSettings copyWith({double? size, String? tamilFont, String? englishFont, String? color}) => TextSettings(
+  TextSettings copyWith({
+    double? size,
+    String? tamilFont,
+    String? englishFont,
+    String? color,
+    double? lineHeight,
+    bool? justify,
+  }) =>
+      TextSettings(
         size: size ?? this.size,
         tamilFont: tamilFont ?? this.tamilFont,
         englishFont: englishFont ?? this.englishFont,
         color: color ?? this.color,
+        lineHeight: lineHeight ?? this.lineHeight,
+        justify: justify ?? this.justify,
       );
+
+  /// How paragraphs are lined up.
+  TextAlign get align => justify ? TextAlign.justify : TextAlign.start;
 
   ReadingFont get _taFont => tamilFonts.firstWhere((f) => f.id == tamilFont, orElse: () => tamilFonts.first);
   ReadingFont get _enFont => englishFonts.firstWhere((f) => f.id == englishFont, orElse: () => englishFonts.first);
@@ -93,10 +118,10 @@ class TextSettings {
   }
 
   /// Reading style for [lang] at [size] (default: the chosen size).
-  TextStyle style(BuildContext context, String lang, Color themeColor, {double? fontSize, double height = 1.6}) =>
+  TextStyle style(BuildContext context, String lang, Color themeColor, {double? fontSize, double? height}) =>
       TextStyle(
         fontSize: fontSize ?? size,
-        height: height,
+        height: height ?? lineHeight,
         color: textColor(context, themeColor),
         fontFamily: family(lang),
         fontFamilyFallback: fallback(lang),
@@ -123,7 +148,19 @@ class TextSettingsController extends ValueNotifier<TextSettings> {
       tamilFont: (await p.getString('${prefix}font_ta')) ?? 'system',
       englishFont: (await p.getString('${prefix}font_en')) ?? 'system',
       color: (await p.getString('${prefix}font_color')) ?? 'theme',
+      lineHeight: (await p.getDouble('${prefix}line_height')) ?? 1.6,
+      justify: (await p.getBool('${prefix}justify')) ?? false,
     );
+  }
+
+  void setLineHeight(double h) {
+    value = value.copyWith(lineHeight: h);
+    Prefs.instance.set('${prefix}line_height', h);
+  }
+
+  void setJustify(bool on) {
+    value = value.copyWith(justify: on);
+    Prefs.instance.set('${prefix}justify', on);
   }
 
   void setSize(double size, {bool save = true}) {
@@ -148,6 +185,8 @@ class TextSettingsController extends ValueNotifier<TextSettings> {
     Prefs.instance.set('${prefix}font_ta', value.tamilFont);
     Prefs.instance.set('${prefix}font_en', value.englishFont);
     Prefs.instance.set('${prefix}font_color', value.color);
+    Prefs.instance.set('${prefix}line_height', value.lineHeight);
+    Prefs.instance.set('${prefix}justify', value.justify);
   }
 
   void setColor(String id) {
